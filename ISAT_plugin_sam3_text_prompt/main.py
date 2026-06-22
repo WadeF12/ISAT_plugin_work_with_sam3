@@ -28,6 +28,8 @@ class SAM3TextPromptPlugin(PluginBase):
         self._batch_running = False
         self._total_masks = 0
         self._total_objects = 0
+        self._range_mode = False
+        self._range_category = ""
         self.default_prompts = "person, car"
 
     # ==================================================================
@@ -76,24 +78,7 @@ class SAM3TextPromptPlugin(PluginBase):
         main_layout = QtWidgets.QVBoxLayout(main_widget)
         main_layout.setContentsMargins(6, 6, 6, 6)
 
-        # ---- category input ----
-        row = QtWidgets.QWidget()
-        row.setMaximumHeight(36)
-        layout = QtWidgets.QHBoxLayout(row)
-        layout.setContentsMargins(0, 0, 0, 0)
-
-        layout.addWidget(QtWidgets.QLabel("Categories:"))
-        self.category_edit = QtWidgets.QLineEdit()
-        self.category_edit.setPlaceholderText("car, person, tree, dog")
-        self.category_edit.setText(self.default_prompts)
-        self.category_edit.setToolTip(
-            "Text prompt categories, comma separated. "
-            "Each will be predicted by SAM3 text-prompt."
-        )
-        layout.addWidget(self.category_edit)
-        main_layout.addWidget(row)
-
-        # ---- buttons ----
+        # ---- row 1: current image actions ----
         row = QtWidgets.QWidget()
         row.setMaximumHeight(36)
         layout = QtWidgets.QHBoxLayout(row)
@@ -103,17 +88,92 @@ class SAM3TextPromptPlugin(PluginBase):
         self.predict_current_btn.setToolTip("SAM3 text-prompt on current image")
         self.predict_current_btn.clicked.connect(self.predict_current)
 
-        self.predict_all_btn = QtWidgets.QPushButton("Predict ALL")
-        self.predict_all_btn.setToolTip("Full batch predict — overwrites ALL images")
+        self.stop_btn = QtWidgets.QPushButton("Stop")
+        self.stop_btn.setToolTip("Stop batch")
+        self.stop_btn.clicked.connect(self.stop)
+        self.stop_btn.setEnabled(False)
+
+        layout.addWidget(self.predict_current_btn)
+        layout.addWidget(self.stop_btn)
+        layout.addStretch()
+        main_layout.addWidget(row)
+
+        # ---- separator ----
+        sep = QtWidgets.QFrame()
+        sep.setFrameShape(QtWidgets.QFrame.HLine)
+        sep.setFrameShadow(QtWidgets.QFrame.Sunken)
+        main_layout.addWidget(sep)
+
+        # ---- row 2: range settings + category + mapping ----
+        row = QtWidgets.QWidget()
+        row.setMaximumHeight(36)
+        layout = QtWidgets.QHBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        layout.addWidget(QtWidgets.QLabel("From #"))
+        self.range_start_spin = QtWidgets.QSpinBox()
+        self.range_start_spin.setMinimum(1)
+        self.range_start_spin.setMaximum(1)
+        self.range_start_spin.setToolTip("Start image index (1-based)")
+        layout.addWidget(self.range_start_spin)
+
+        layout.addWidget(QtWidgets.QLabel("To #"))
+        self.range_end_spin = QtWidgets.QSpinBox()
+        self.range_end_spin.setMinimum(1)
+        self.range_end_spin.setMaximum(1)
+        self.range_end_spin.setToolTip("End image index (1-based, inclusive)")
+        layout.addWidget(self.range_end_spin)
+
+        self.range_count_label = QtWidgets.QLabel("of 0")
+        layout.addWidget(self.range_count_label)
+
+        # unified category input (used by ALL operations)
+        layout.addWidget(QtWidgets.QLabel("Cat:"))
+        self.range_category_edit = QtWidgets.QLineEdit()
+        self.range_category_edit.setPlaceholderText("car, person, tree")
+        self.range_category_edit.setText(self.default_prompts)
+        self.range_category_edit.setToolTip(
+            "Categories for SAM3 text-prompt and Annotate Range.\n"
+            "SAM3 mode: comma-separated text prompts.\n"
+            "Annotate Range mode: single category name."
+        )
+        layout.addWidget(self.range_category_edit)
+
+        # label mapping: prompt:label pairs
+        layout.addWidget(QtWidgets.QLabel("Map:"))
+        self.mapping_edit = QtWidgets.QLineEdit()
+        self.mapping_edit.setPlaceholderText("grass/leaves:lawn")
+        self.mapping_edit.setToolTip(
+            "Optional label mapping: 'prompt:label' pairs, comma-separated.\n"
+            "e.g. 'grass/leaves:lawn, car:vehicle'\n"
+            "SAM3 detects with the prompt (left of ':'), "
+            "but saves as the label (right of ':').\n"
+            "Categories without a mapping keep their original name."
+        )
+        layout.addWidget(self.mapping_edit)
+        main_layout.addWidget(row)
+
+        # ---- row 3: range actions (all use From # / To #) ----
+        row = QtWidgets.QWidget()
+        row.setMaximumHeight(36)
+        layout = QtWidgets.QHBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        self.predict_all_btn = QtWidgets.QPushButton("Predict Range")
+        self.predict_all_btn.setToolTip(
+            "SAM3 text-prompt batch on the selected range.\n"
+            "OVERWRITES existing annotations."
+        )
         self.predict_all_btn.clicked.connect(self.predict_all)
         self.predict_all_btn.setStyleSheet(
             "QPushButton { background-color: #0078D4; color: white; "
             "font-weight: bold; padding: 4px 12px; }"
         )
 
-        self.predict_resume_btn = QtWidgets.QPushButton("Resume")
+        self.predict_resume_btn = QtWidgets.QPushButton("Resume Range")
         self.predict_resume_btn.setToolTip(
-            "Resume prediction — skip images that already have annotations"
+            "SAM3 text-prompt on the selected range.\n"
+            "Skips images that already have annotations."
         )
         self.predict_resume_btn.clicked.connect(self.predict_resume)
         self.predict_resume_btn.setStyleSheet(
@@ -121,15 +181,32 @@ class SAM3TextPromptPlugin(PluginBase):
             "font-weight: bold; padding: 4px 12px; }"
         )
 
-        self.stop_btn = QtWidgets.QPushButton("Stop")
-        self.stop_btn.setToolTip("Stop batch")
-        self.stop_btn.clicked.connect(self.stop)
-        self.stop_btn.setEnabled(False)
+        self.range_annotate_btn = QtWidgets.QPushButton("Annotate Range")
+        self.range_annotate_btn.setToolTip(
+            "Set full-image annotation for the selected range.\n"
+            "Each image gets one polygon covering the whole image."
+        )
+        self.range_annotate_btn.clicked.connect(self.predict_range)
+        self.range_annotate_btn.setStyleSheet(
+            "QPushButton { background-color: #CA5010; color: white; "
+            "font-weight: bold; padding: 4px 12px; }"
+        )
 
-        layout.addWidget(self.predict_current_btn)
+        self.range_delete_btn = QtWidgets.QPushButton("Delete Range")
+        self.range_delete_btn.setToolTip(
+            "DELETE annotation files (.json) for the selected range.\n"
+            "This is irreversible — use with caution."
+        )
+        self.range_delete_btn.clicked.connect(self.delete_range)
+        self.range_delete_btn.setStyleSheet(
+            "QPushButton { background-color: #D13438; color: white; "
+            "font-weight: bold; padding: 4px 12px; }"
+        )
+
         layout.addWidget(self.predict_all_btn)
         layout.addWidget(self.predict_resume_btn)
-        layout.addWidget(self.stop_btn)
+        layout.addWidget(self.range_annotate_btn)
+        layout.addWidget(self.range_delete_btn)
         main_layout.addWidget(row)
 
         # ---- progress bar ----
@@ -170,10 +247,34 @@ class SAM3TextPromptPlugin(PluginBase):
     # ==================================================================
 
     def _get_categories(self) -> List[str]:
-        raw = self.category_edit.text().strip()
+        raw = self.range_category_edit.text().strip()
         if not raw:
             return ["object"]
         return [p.strip() for p in raw.split(",") if p.strip()]
+
+    def _parse_mapping(self) -> dict:
+        """解析 Map: 输入框，返回 {prompt: label} 映射字典。
+
+        格式: 'prompt1:label1, prompt2:label2'
+        不带 ':' 的条目忽略。
+        """
+        raw = self.mapping_edit.text().strip()
+        if not raw:
+            return {}
+        mapping = {}
+        for pair in raw.split(","):
+            pair = pair.strip()
+            if ":" in pair:
+                prompt, label = pair.split(":", 1)
+                prompt = prompt.strip()
+                label = label.strip()
+                if prompt and label:
+                    mapping[prompt] = label
+        return mapping
+
+    def _map_category(self, category: str, mapping: dict) -> str:
+        """将类别名按映射表转换，无映射则保持原名。"""
+        return mapping.get(category, category)
 
     def _check_sam3(self) -> bool:
         if not self.mainwindow.use_segment_anything:
@@ -195,12 +296,16 @@ class SAM3TextPromptPlugin(PluginBase):
         self.predict_current_btn.setEnabled(False)
         self.predict_all_btn.setEnabled(False)
         self.predict_resume_btn.setEnabled(False)
+        self.range_annotate_btn.setEnabled(False)
+        self.range_delete_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
 
     def _enable_buttons(self):
         self.predict_current_btn.setEnabled(True)
         self.predict_all_btn.setEnabled(True)
         self.predict_resume_btn.setEnabled(True)
+        self.range_annotate_btn.setEnabled(True)
+        self.range_delete_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
 
     def predict_current(self):
@@ -231,22 +336,61 @@ class SAM3TextPromptPlugin(PluginBase):
         finally:
             self._enable_buttons()
 
+    # ==================================================================
+    # Range helper — shared by predict_all / resume / range / delete
+    # ==================================================================
+
+    def _resolve_range(self, require_files: bool = True):
+        """读取 spin box 范围，校验并返回 (files_subset, start_1, end_1)。
+
+        若校验失败则弹出对话框并返回 (None, None, None)。
+        """
+        all_files = list(self.mainwindow.files_list)
+        total = len(all_files)
+        if total == 0:
+            if require_files:
+                QtWidgets.QMessageBox.information(self.mainwindow, "Info", "No images.")
+            return None, None, None
+
+        start_1 = self.range_start_spin.value()
+        end_1 = self.range_end_spin.value()
+
+        if start_1 > end_1:
+            QtWidgets.QMessageBox.warning(
+                self.mainwindow, "Input Error",
+                f"Start (#{start_1}) must be ≤ End (#{end_1})."
+            )
+            return None, None, None
+
+        start_idx = start_1 - 1
+        end_idx = end_1 - 1  # inclusive
+
+        if start_idx < 0 or end_idx >= total:
+            QtWidgets.QMessageBox.warning(
+                self.mainwindow, "Input Error",
+                f"Range #{start_1}–#{end_1} is out of bounds (1–{total})."
+            )
+            return None, None, None
+
+        files = all_files[start_idx:end_idx + 1]
+        return files, start_1, end_1
+
     def predict_all(self):
         if not self._check_sam3():
             return
 
-        files = list(self.mainwindow.files_list)
-        if not files:
-            QtWidgets.QMessageBox.information(self.mainwindow, "Info", "No images.")
+        files, start_1, end_1 = self._resolve_range()
+        if files is None:
             return
 
         categories = self._get_categories()
 
         reply = QtWidgets.QMessageBox.question(
             self.mainwindow, "Confirm",
-            f"Predict {len(files)} images with SAM3 text-prompt.\n"
+            f"Predict images #{start_1} – #{end_1} ({len(files)} images)\n"
+            f"with SAM3 text-prompt.\n"
             f"Categories: {', '.join(categories)}\n\n"
-            f"This will overwrite existing annotations. Continue?",
+            f"This will OVERWRITE existing annotations. Continue?",
             QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
         )
         if reply != QtWidgets.QMessageBox.Yes:
@@ -257,6 +401,7 @@ class SAM3TextPromptPlugin(PluginBase):
         self._batch_running = True
         self._total_masks = 0
         self._total_objects = 0
+        self._range_mode = False
         self.result_table.setRowCount(0)
         self.processbar.setMaximum(len(files))
         self.processbar.setValue(0)
@@ -265,39 +410,40 @@ class SAM3TextPromptPlugin(PluginBase):
         QTimer.singleShot(50, self._process_next)
 
     def predict_resume(self):
-        """断点续推理——跳过已有标注的文件，只推理未标注的图片。"""
+        """断点续推理——在选定范围内跳过已有标注，只推理未标注的图片。"""
         if not self._check_sam3():
             return
 
-        all_files = list(self.mainwindow.files_list)
-        if not all_files:
-            QtWidgets.QMessageBox.information(self.mainwindow, "Info", "No images.")
+        range_files, start_1, end_1 = self._resolve_range()
+        if range_files is None:
             return
 
         categories = self._get_categories()
 
-        # 检测哪些文件已有标注
+        # 检测范围内哪些文件已有标注
         label_root = self.mainwindow.label_root
         annotated = set()
-        for filename in all_files:
+        for filename in range_files:
             base = ".".join(filename.split(".")[:-1])
             json_path = os.path.join(label_root, base + ".json")
             if os.path.isfile(json_path):
                 annotated.add(filename)
 
         # 过滤出未标注的文件
-        files = [f for f in all_files if f not in annotated]
+        files = [f for f in range_files if f not in annotated]
         skipped = len(annotated)
 
         if not files:
             QtWidgets.QMessageBox.information(
                 self.mainwindow, "Info",
-                f"All {len(all_files)} images already have annotations. Nothing to do."
+                f"All {len(range_files)} images in #{start_1}–#{end_1} "
+                f"already have annotations. Nothing to do."
             )
             return
 
         reply = QtWidgets.QMessageBox.question(
             self.mainwindow, "Resume Prediction",
+            f"Range: #{start_1} – #{end_1}\n"
             f"Skip {skipped} annotated images.\n"
             f"Predict {len(files)} remaining images with SAM3 text-prompt.\n"
             f"Categories: {', '.join(categories)}\n\n"
@@ -312,12 +458,111 @@ class SAM3TextPromptPlugin(PluginBase):
         self._batch_running = True
         self._total_masks = 0
         self._total_objects = 0
+        self._range_mode = False
         self.result_table.setRowCount(0)
         self.processbar.setMaximum(len(files))
         self.processbar.setValue(0)
 
         self._disable_buttons()
         QTimer.singleShot(50, self._process_next)
+
+    def predict_range(self):
+        """Range annotation — 对指定编号范围的图片进行全图标注。
+
+        将起止编号之间的每张图片用整个画面区域标注为指定类别。
+        不依赖 SAM3，纯几何标注。
+        """
+        files, start_1, end_1 = self._resolve_range()
+        if files is None:
+            return
+
+        category = self.range_category_edit.text().strip()
+        if not category:
+            QtWidgets.QMessageBox.warning(
+                self.mainwindow, "Input Error",
+                "Please enter a category name."
+            )
+            return
+
+        reply = QtWidgets.QMessageBox.question(
+            self.mainwindow, "Confirm Range Annotation",
+            f"Annotate images #{start_1} – #{end_1} ({len(files)} images)\n"
+            f"as full-image category: \"{category}\"\n\n"
+            f"Existing annotations for these images will be REPLACED.\nContinue?",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+        )
+        if reply != QtWidgets.QMessageBox.Yes:
+            return
+
+        self._batch_files = files
+        self._batch_index = 0
+        self._batch_running = True
+        self._total_masks = 0
+        self._total_objects = 0
+        self.result_table.setRowCount(0)
+        self.processbar.setMaximum(len(files))
+        self.processbar.setValue(0)
+
+        # 暂存 range 专用的提示词，供 _process_next 区分模式
+        self._range_mode = True
+        self._range_category = category
+
+        self._disable_buttons()
+        QTimer.singleShot(50, self._process_next)
+
+    def delete_range(self):
+        """删除指定编号范围图片的标注文件 (.json)。
+
+        不可逆操作，需二次确认。
+        """
+        files, start_1, end_1 = self._resolve_range()
+        if files is None:
+            return
+
+        # 统计哪些有标注
+        label_root = self.mainwindow.label_root
+        existing = []
+        for filename in files:
+            base = ".".join(filename.split(".")[:-1])
+            json_path = os.path.join(label_root, base + ".json")
+            if os.path.isfile(json_path):
+                existing.append(json_path)
+
+        if not existing:
+            QtWidgets.QMessageBox.information(
+                self.mainwindow, "Info",
+                f"No annotation files found for images #{start_1}–#{end_1}."
+            )
+            return
+
+        reply = QtWidgets.QMessageBox.warning(
+            self.mainwindow, "⚠ Delete Annotations",
+            f"Delete {len(existing)} annotation file(s) for\n"
+            f"images #{start_1} – #{end_1}?\n\n"
+            f"THIS CANNOT BE UNDONE.\n"
+            f"Affected files:\n"
+            + "\n".join(f"  • {os.path.basename(p)}" for p in existing[:10])
+            + (f"\n  ... and {len(existing) - 10} more" if len(existing) > 10 else ""),
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.No,  # default to No for safety
+        )
+        if reply != QtWidgets.QMessageBox.Yes:
+            return
+
+        deleted = 0
+        for json_path in existing:
+            try:
+                os.remove(json_path)
+                deleted += 1
+            except OSError as e:
+                print(f"[Delete] Failed to remove {json_path}: {e}")
+
+        self.status_label.setText(
+            f"Deleted {deleted} annotation file(s) for #{start_1}–#{end_1}."
+        )
+        # 刷新当前视图
+        if self.mainwindow.current_index is not None:
+            self.mainwindow.show_image(self.mainwindow.current_index, zoomfit=False)
 
     def _process_next(self):
         if not self._batch_running or self._batch_index >= len(self._batch_files):
@@ -328,17 +573,25 @@ class SAM3TextPromptPlugin(PluginBase):
         self._batch_index += 1
         filename = self._batch_files[idx]
         file_path = os.path.join(self.mainwindow.image_root, filename)
-        categories = self._get_categories()
 
         self.status_label.setText(f"[{idx + 1}/{len(self._batch_files)}] {filename}")
         self.processbar.setValue(idx + 1)
         QtWidgets.QApplication.processEvents()
 
         try:
-            num_masks, num_objects = self._predict_single_image(
-                file_path, filename, categories
-            )
-            print(f"[SAM3] {filename}: masks={num_masks}, objects={num_objects}")
+            # 分支: range 全图标注模式 vs SAM3 text-prompt 模式
+            if getattr(self, '_range_mode', False):
+                num_masks, num_objects = self._predict_range_single_image(
+                    file_path, filename
+                )
+                mode_tag = "[Range]"
+            else:
+                categories = self._get_categories()
+                num_masks, num_objects = self._predict_single_image(
+                    file_path, filename, categories
+                )
+                mode_tag = "[SAM3]"
+            print(f"{mode_tag} {filename}: masks={num_masks}, objects={num_objects}")
             self._total_masks += num_masks
             self._total_objects += num_objects
 
@@ -376,6 +629,9 @@ class SAM3TextPromptPlugin(PluginBase):
         import numpy as np
         from PIL import Image
 
+        # 解析 label 映射
+        mapping = self._parse_mapping()
+
         # 1) 打开图片
         image = Image.open(file_path).convert("RGB")
 
@@ -403,6 +659,9 @@ class SAM3TextPromptPlugin(PluginBase):
         for category in categories:
             if not category or category == "__background__":
                 continue
+
+            # 应用映射: 用 prompt 检测，用 mapped label 保存
+            save_label = self._map_category(category, mapping)
 
             # 3) SAM3 text-prompt 预测
             masks, scores = self.mainwindow.segany.predictor.predict_with_text_prompt(
@@ -433,7 +692,7 @@ class SAM3TextPromptPlugin(PluginBase):
 
                     area = self._polygon_area(segmentation)
                     obj = Object(
-                        category=category, group=group,
+                        category=save_label, group=group,
                         segmentation=segmentation, area=area,
                         layer=1 + len(annotation.objects) + len([obj for _ in []]),
                         bbox=(xmin, ymin, xmax, ymax),
@@ -449,6 +708,46 @@ class SAM3TextPromptPlugin(PluginBase):
         annotation.save_annotation()
         return total_masks, total_objects
 
+    def _predict_range_single_image(self, file_path: str, filename: str) -> tuple:
+        """对单张图片进行全图标注——整个画面作为一个多边形，归入 range 类别。
+
+        不依赖 SAM3，纯几何标注。
+        """
+        from PIL import Image
+
+        image = Image.open(file_path)
+        w, h = image.size
+
+        from ISAT.annotation import Annotation, Object
+        label_path = os.path.join(
+            self.mainwindow.label_root,
+            ".".join(filename.split(".")[:-1]) + ".json"
+        )
+        annotation = Annotation(file_path, label_path)
+
+        # 应用映射
+        mapping = self._parse_mapping()
+        save_label = self._map_category(self._range_category, mapping)
+
+        # 全图 polygon: 左上 → 右上 → 右下 → 左下
+        segmentation = [(0.0, 0.0), (float(w), 0.0),
+                        (float(w), float(h)), (0.0, float(h))]
+        area = float(w) * float(h)
+
+        obj = Object(
+            category=save_label,
+            group=1,
+            segmentation=segmentation,
+            area=area,
+            layer=1,
+            bbox=(0.0, 0.0, float(w), float(h)),
+            iscrowd=False,
+            note="range_full_image",
+        )
+        annotation.objects = [obj]
+        annotation.save_annotation()
+        return 1, 1  # masks, objects
+
     @staticmethod
     def _polygon_area(points: list) -> float:
         area = 0
@@ -461,6 +760,7 @@ class SAM3TextPromptPlugin(PluginBase):
 
     def _finish(self):
         self._batch_running = False
+        self._range_mode = False
         self._enable_buttons()
         if self.mainwindow.current_index is not None:
             self.mainwindow.show_image(self.mainwindow.current_index, zoomfit=False)
@@ -482,3 +782,11 @@ class SAM3TextPromptPlugin(PluginBase):
         self.predict_current_btn.setEnabled(True)
         self.predict_all_btn.setEnabled(True)
         self.predict_resume_btn.setEnabled(True)
+        self.range_annotate_btn.setEnabled(True)
+        self.range_delete_btn.setEnabled(True)
+
+        # 同步 range spinbox 上限到当前图片总数
+        total = len(self.mainwindow.files_list)
+        self.range_start_spin.setMaximum(max(1, total))
+        self.range_end_spin.setMaximum(max(1, total))
+        self.range_count_label.setText(f"of {total}")
