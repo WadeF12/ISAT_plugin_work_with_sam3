@@ -1,0 +1,227 @@
+Metadata-Version: 2.1
+Name: isat-plugin-sam3-text-prompt
+Version: 0.1.0
+Summary: ISAT plugin: SAM3 multi-category text-prompt batch auto annotation.
+Home-page: https://github.com/yourname/ISAT_plugin_sam3_text_prompt
+Author: your-name
+Author-email: your-email@example.com
+License: Apache2.0
+Keywords: isat-sam,isat plugin,sam3,text prompt,auto annotation
+Classifier: Intended Audience :: Developers
+Classifier: Intended Audience :: Science/Research
+Classifier: Development Status :: 4 - Beta
+Classifier: Natural Language :: Chinese (Simplified)
+Classifier: Natural Language :: English
+Classifier: License :: OSI Approved :: Apache Software License
+Classifier: Operating System :: OS Independent
+Classifier: Programming Language :: Python
+Classifier: Programming Language :: Python :: 3.8
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Requires-Python: >=3.8
+Description-Content-Type: text/markdown
+Requires-Dist: isat-sam>=1.4.0
+Requires-Dist: numpy
+Requires-Dist: opencv-python
+
+# ISAT Plugin: SAM3 Text-Prompt Auto Annotation
+
+使用 SAM3 的多类别文本提示（Text Prompt）功能，对 ISAT 中当前标注文件夹的**所有图片**自动进行分割预测，**无需手动点击**，批量预测并保存标注。
+
+---
+
+## 功能特点
+
+- 🔤 **文本提示**：输入自然语言类别名（如 `car, person, tree`），SAM3 自动定位并分割
+- 📁 **批量预测**：一键遍历文件夹中所有图片，自动预测并保存
+- 🏷️ **多类别**：一次预测多个类别，每个文本提示对应一个 ISAT 标注类别
+- 🎚️ **置信度阈值**：可调节阈值过滤低质量预测
+- 🧵 **后台运行**：推理在独立线程中执行，不阻塞 ISAT 主界面
+
+---
+
+## 安装
+
+### 1. 安装 SAM3
+
+首先需要安装 SAM3。根据你的环境选择：
+
+**方式 A: 使用 Meta 官方 SAM3 包**
+```bash
+pip install sam3
+```
+
+**方式 B: 从 GitHub 安装**
+```bash
+git clone https://github.com/facebookresearch/sam3.git
+cd sam3
+pip install -e .
+```
+
+**方式 C: 使用 SAM3 ONNX 导出**
+如果你有导出的 ONNX 模型，只需安装 onnxruntime：
+```bash
+pip install onnxruntime-gpu
+```
+
+### 2. 安装插件
+
+```bash
+cd ISAT_plugin_sam3_text_prompt
+pip install -e .
+```
+
+或打包后安装：
+```bash
+python setup.py sdist
+pip install dist/isat-plugin-sam3-text-prompt-0.1.0.tar.gz
+```
+
+### 3. 验证安装
+
+启动 ISAT，在菜单栏 **Plugins** 中应该能看到 **SAM3TextPromptPlugin**。
+
+---
+
+## 在 ISAT 中使用
+
+### 基本流程
+
+```
+┌─────────────────────────────────────────────────────┐
+│  1. 在 ISAT 中打开图片文件夹                           │
+│     (File → Open Dir)                                │
+│                                                      │
+│  2. 启用插件                                          │
+│     (Plugins → 勾选 SAM3TextPromptPlugin)             │
+│                                                      │
+│  3. 加载 SAM3 模型                                    │
+│     (点击 "Open Model" → 选择 .pt 模型文件)            │
+│                                                      │
+│  4. 输入文本提示词                                     │
+│     (如: car, person, tree, dog)                      │
+│                                                      │
+│  5. 设置置信度阈值 (默认 0.3)                           │
+│                                                      │
+│  6. 开始预测                                          │
+│     - "Predict Current": 仅预测当前图片                │
+│     - "Predict ALL":     批量预测整个文件夹             │
+└─────────────────────────────────────────────────────┘
+```
+
+### UI 说明
+
+```
+┌──────────────────────────────────────────┐
+│ SAM3 Text Prompt Auto Annotation         │
+├──────────────────────────────────────────┤
+│ [model.pt           ] [ Open Model ]     │  ← 选择 SAM3 模型
+│                                          │
+│ Prompts: [car, person, tree, dog    ]    │  ← 文本提示（逗号分隔）
+│                                          │
+│ Threshold: [0.30]                        │  ← 置信度阈值
+│                                          │
+│ [ Predict Current ] [ Predict ALL ] [Stop]│  ← 操作按钮
+│                                          │
+│ ████████████░░░░░░░░ 60%                 │  ← 进度条
+│                                          │
+│ Ready. Load a SAM3 model to start.       │  ← 状态信息
+│                                          │
+│ ┌──────────┬──────────┬──────────┐       │
+│ │ Filename │ Annots   │ Status   │       │  ← 结果表格
+│ ├──────────┼──────────┼──────────┤       │
+│ │ img1.jpg │ 5        │ OK       │       │
+│ │ img2.jpg │ 3        │ OK       │       │
+│ └──────────┴──────────┴──────────┘       │
+└──────────────────────────────────────────┘
+```
+
+### 文本提示技巧
+
+| 场景 | 提示词建议 |
+|------|-----------|
+| 通用目标检测 | `person, car, bicycle, motorcycle, bus, truck` |
+| 室内场景 | `person, chair, table, sofa, tv, bottle, cup` |
+| 室外自然 | `tree, person, car, building, sky, road` |
+| 医学影像 | `tumor, organ, vessel, lesion` |
+| 遥感图像 | `building, road, water, vehicle, tree` |
+
+提示词越具体，SAM3 的定位越准确。
+
+---
+
+## 适配你的 SAM3
+
+插件设计为**模型层解耦**。如果 SAM3 的 API 与当前代码不匹配，只需修改一个文件：
+
+**`ISAT_plugin_sam3_text_prompt/sam3_predictor.py`**
+
+需要修改的方法：
+
+```python
+def _load_model(self, model_path, device):
+    """在此加载你的 SAM3 模型"""
+    # 替换为你的加载代码
+    ...
+
+def _predict_single_text(self, text_prompt):
+    """在此实现文本提示推理"""
+    # 替换为你的推理代码
+    ...
+```
+
+---
+
+## 项目结构
+
+```
+ISAT_plugin_sam3_text_prompt/
+├── MANIFEST.in
+├── README.md
+├── requirements.txt
+├── setup.py
+├── display/                              # 插件图标等（可选）
+└── ISAT_plugin_sam3_text_prompt/
+    ├── __init__.py                       # 版本、作者信息
+    ├── main.py                           # 插件主类 + UI + ISAT 集成
+    └── sam3_predictor.py                 # SAM3 模型封装
+```
+
+---
+
+## 工作原理
+
+```
+用户输入: ["car", "person", "tree"]
+                │
+                ▼
+    ┌──────────────────────┐
+    │  遍历文件夹图片       │
+    │  for each image:     │
+    │    ├─ SAM3 编码图像   │
+    │    ├─ 文本提示解码    │
+    │    ├─ mask → 轮廓     │
+    │    ├─ 轮廓 → polygon  │
+    │    ├─ 注入 ISAT 标注  │
+    │    └─ 保存 .json      │
+    └──────────────────────┘
+```
+
+核心注入机制参考了 ISAT 内置的 `AutoAnnotatePlugin`，利用 `scene.finish_draw()` 将预测 mask 转化为 ISAT 格式的 polygon 标注。
+
+---
+
+## 常见问题
+
+**Q: 插件加载后看不到面板？**
+A: 确保已在 Plugins 菜单中勾选插件，面板会出现在 ISAT 右侧 dock 区域。
+
+**Q: 预测后没有标注出现？**
+A: 检查置信度阈值是否过高（建议从 0.2 开始），确认文本提示词与图片内容相关。
+
+**Q: 预测速度慢？**
+A: SAM3 模型较大，建议使用 GPU（CUDA）。首次加载模型需要时间，之后编码复用。
+
+**Q: 如何让提示词对应不同的 ISAT 类别？**
+A: 提示词 `car, person, tree` 会直接作为 ISAT 中的 category 名称。在 ISAT 中预先定义同名类别即可。

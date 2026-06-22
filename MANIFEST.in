@@ -1,0 +1,4 @@
+include README.md
+include requirements.txt
+recursive-include ISAT_plugin_sam3_text_prompt *.py
+recursive-include display *

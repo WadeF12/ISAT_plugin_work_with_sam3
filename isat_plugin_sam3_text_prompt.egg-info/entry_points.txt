@@ -1,0 +1,2 @@
+[isat.plugins]
+sam3_text_prompt_plugin = ISAT_plugin_sam3_text_prompt.main:SAM3TextPromptPlugin

@@ -1,0 +1,13 @@
+MANIFEST.in
+README.md
+requirements.txt
+setup.py
+ISAT_plugin_sam3_text_prompt/__init__.py
+ISAT_plugin_sam3_text_prompt/main.py
+ISAT_plugin_sam3_text_prompt/sam3_predictor.py
+isat_plugin_sam3_text_prompt.egg-info/PKG-INFO
+isat_plugin_sam3_text_prompt.egg-info/SOURCES.txt
+isat_plugin_sam3_text_prompt.egg-info/dependency_links.txt
+isat_plugin_sam3_text_prompt.egg-info/entry_points.txt
+isat_plugin_sam3_text_prompt.egg-info/requires.txt
+isat_plugin_sam3_text_prompt.egg-info/top_level.txt
