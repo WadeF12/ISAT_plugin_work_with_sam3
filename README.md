@@ -1,13 +1,14 @@
 ## 安装
 
 ```bash
-cd ISAT_plugin_sam3_text_prompt
+conda activate [ISAT环境]
+cd [解压后的文件夹：ISAT_plugin_sam3_text_prompt]
 pip install -e .
 ```
 
 启动 ISAT，在右侧板会有 **SAM3TextPromptPlugin** ，可以点击最小化窗口单独拉出来
 
-> **前置条件:** ISAT 中需已加载 SAM3 模型（SAM1/SAM2 不支持文本提示）
+> 使用推理功能时，ISAT 中需加载 SAM3 模型（SAM1/SAM2 不支持文本提示）
 
 ---
 
