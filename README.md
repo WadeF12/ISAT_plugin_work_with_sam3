@@ -44,7 +44,7 @@ Cat:  grass, lawn, soil, fence, person
 Map:  grass:lawn, person:__background__
 ```
 
-> Cat 中的词需要符合大模型的理解，如业务场景中的 tallgrass, hardroad 类别，与广义的词语含义不同，应避免使用
+> Cat 中的词需要符合大模型的理解，如业务场景中的 tallgrass, hardroad 类别，与广义的词语含义不同，应避免使用并用其他模型能够理解的词代替，并结合映射功能保存为需要的类别名
 
 - **多对一支持:** 多个检测词可映射到同一个 label。
 - **留空 = 不映射:** 检测词直接作为保存的 label。
