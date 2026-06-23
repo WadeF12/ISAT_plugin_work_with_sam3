@@ -41,8 +41,8 @@ pip install -e .
 
 例：
 ```
-Cat:  grass/leaves, green vegetation
-Map:  grass/leaves:lawn, green vegetation:lawn
+Cat:  grass, green vegetation
+Map:  grass:lawn, green vegetation:lawn
 ```
 
 - **多对一支持:** 多个检测词可映射到同一个 label。
@@ -55,10 +55,10 @@ Map:  grass/leaves:lawn, green vegetation:lawn
 
 所有按钮都受 `From #` / `To #` 范围限制。
 
- **Predict Range** 🔵  对范围内**所有图片**执行 SAM3 文本提示预测。新的 mask **追加**在已有标注之上，不覆盖旧标注。
- **Resume Range**  🟢  对范围内**尚无标注文件的图片**执行预测。已有 `.json` 标注的图片自动跳过。适合中断后继续。
- **Annotate Range**  🟠  将范围内每张图片**整个画面区域**标注为 `Cat:` 中指定的类别。已有标注会被**替换**。不调用 SAM3。
- **Delete Range**  🔴  **删除**范围内所有图片的 `.json` 标注文件。不可逆，二次确认。
+ **Predict Range** 🔵  对范围内**所有图片**执行 SAM3 文本提示预测。新的 mask **追加**在已有标注之上，不覆盖旧标注。|
+ **Resume Range**  🟢  对范围内**尚无标注文件的图片**执行预测。已有 `.json` 标注的图片自动跳过。适合中断后继续。|
+ **Annotate Range**  🟠  将范围内每张图片**整个画面区域**标注为 `Cat:` 中指定的类别。已有标注会被**替换**。不调用 SAM3。|
+ **Delete Range**  🔴  **删除**范围内所有图片的 `.json` 标注文件。不可逆，二次确认。|
 
 ---
 
