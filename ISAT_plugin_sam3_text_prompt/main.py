@@ -30,6 +30,14 @@ class SAM3TextPromptPlugin(PluginBase):
         self._total_objects = 0
         self._range_mode = False
         self._range_category = ""
+        self._delete_small_mode = False
+        self._delete_small_data = {}
+        self._small_scan_mode = False
+        self._small_scan_files = []
+        self._small_scan_index = 0
+        self._small_scan_total = 0
+        self._small_scan_affected = 0
+        self._small_scan_params = {}
         self.default_prompts = "person, car"
 
     # ==================================================================
@@ -113,14 +121,16 @@ class SAM3TextPromptPlugin(PluginBase):
         layout.addWidget(QtWidgets.QLabel("From #"))
         self.range_start_spin = QtWidgets.QSpinBox()
         self.range_start_spin.setMinimum(1)
-        self.range_start_spin.setMaximum(1)
+        self.range_start_spin.setMaximum(999999)
+        self.range_start_spin.setValue(1)
         self.range_start_spin.setToolTip("Start image index (1-based)")
         layout.addWidget(self.range_start_spin)
 
         layout.addWidget(QtWidgets.QLabel("To #"))
         self.range_end_spin = QtWidgets.QSpinBox()
         self.range_end_spin.setMinimum(1)
-        self.range_end_spin.setMaximum(1)
+        self.range_end_spin.setMaximum(999999)
+        self.range_end_spin.setValue(1)
         self.range_end_spin.setToolTip("End image index (1-based, inclusive)")
         layout.addWidget(self.range_end_spin)
 
@@ -207,6 +217,47 @@ class SAM3TextPromptPlugin(PluginBase):
         layout.addWidget(self.predict_resume_btn)
         layout.addWidget(self.range_annotate_btn)
         layout.addWidget(self.range_delete_btn)
+        main_layout.addWidget(row)
+
+        # ---- row 4: delete small masks ----
+        row = QtWidgets.QWidget()
+        row.setMaximumHeight(36)
+        layout = QtWidgets.QHBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        layout.addWidget(QtWidgets.QLabel("Threshold:"))
+        self.small_threshold_spin = QtWidgets.QDoubleSpinBox()
+        self.small_threshold_spin.setRange(0.01, 100.0)
+        self.small_threshold_spin.setValue(1.0)
+        self.small_threshold_spin.setDecimals(2)
+        self.small_threshold_spin.setSuffix("%")
+        self.small_threshold_spin.setToolTip(
+            "Masks with area < this % of image area will be deleted."
+        )
+        layout.addWidget(self.small_threshold_spin)
+
+        layout.addWidget(QtWidgets.QLabel("Cat:"))
+        self.small_category_edit = QtWidgets.QLineEdit()
+        self.small_category_edit.setPlaceholderText("e.g. person")
+        self.small_category_edit.setToolTip(
+            "Only delete small masks of this category.\n"
+            "Leave empty to delete small masks of ALL categories."
+        )
+        layout.addWidget(self.small_category_edit)
+
+        self.delete_small_btn = QtWidgets.QPushButton("Delete Small Masks")
+        self.delete_small_btn.setToolTip(
+            "Scan the selected range (From # – To #) and remove masks\n"
+            "whose area is below the threshold percentage of image area.\n"
+            "Only affects the specified category (or all if left empty)."
+        )
+        self.delete_small_btn.clicked.connect(self.delete_small_masks)
+        self.delete_small_btn.setStyleSheet(
+            "QPushButton { background-color: #881798; color: white; "
+            "font-weight: bold; padding: 4px 12px; }"
+        )
+        layout.addWidget(self.delete_small_btn)
+        layout.addStretch()
         main_layout.addWidget(row)
 
         # ---- progress bar ----
@@ -298,6 +349,7 @@ class SAM3TextPromptPlugin(PluginBase):
         self.predict_resume_btn.setEnabled(False)
         self.range_annotate_btn.setEnabled(False)
         self.range_delete_btn.setEnabled(False)
+        self.delete_small_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
 
     def _enable_buttons(self):
@@ -306,6 +358,7 @@ class SAM3TextPromptPlugin(PluginBase):
         self.predict_resume_btn.setEnabled(True)
         self.range_annotate_btn.setEnabled(True)
         self.range_delete_btn.setEnabled(True)
+        self.delete_small_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
 
     def predict_current(self):
@@ -564,6 +617,197 @@ class SAM3TextPromptPlugin(PluginBase):
         if self.mainwindow.current_index is not None:
             self.mainwindow.show_image(self.mainwindow.current_index, zoomfit=False)
 
+    def delete_small_masks(self):
+        """异步扫描并删除指定范围内面积小于阈值的 mask。
+
+        分两阶段异步执行: 扫描 → 确认 → 删除，全程不阻塞 UI。
+        """
+        files, start_1, end_1 = self._resolve_range()
+        if files is None:
+            return
+
+        threshold_pct = self.small_threshold_spin.value()
+        filter_cat = self.small_category_edit.text().strip()
+        filter_cats = set()
+        if filter_cat:
+            filter_cats = {c.strip() for c in filter_cat.split(",") if c.strip()}
+
+        # 保存参数，启动异步扫描
+        self._small_scan_files = files
+        self._small_scan_index = 0
+        self._small_scan_total = 0
+        self._small_scan_affected = 0
+        self._small_scan_params = {
+            "threshold_pct": threshold_pct,
+            "filter_cats": filter_cats,
+            "label_root": self.mainwindow.label_root,
+            "start_1": start_1,
+            "end_1": end_1,
+        }
+        self._small_scan_mode = True
+
+        self.result_table.setRowCount(0)
+        self.processbar.setMaximum(len(files))
+        self.processbar.setValue(0)
+
+        self._disable_buttons()
+        self.status_label.setText(f"Scanning... 0/{len(files)}")
+        QTimer.singleShot(10, self._process_small_scan_next)
+
+    def _process_small_scan_next(self):
+        """异步扫描一张图片的小 mask（QTimer 驱动）。"""
+        files = self._small_scan_files
+        i = self._small_scan_index
+        total = len(files)
+
+        if i >= total:
+            # 扫描完成 → 显示结果
+            self._small_scan_mode = False
+            self.status_label.setText("Scan complete.")
+            self._show_small_scan_result()
+            return
+
+        # 处理当前文件
+        filename = files[i]
+        self._small_scan_index = i + 1
+
+        params = self._small_scan_params
+        label_root = params["label_root"]
+        threshold_pct = params["threshold_pct"]
+        filter_cats = params["filter_cats"]
+
+        base = ".".join(filename.split(".")[:-1])
+        json_path = os.path.join(label_root, base + ".json")
+        from PIL import Image
+        from ISAT.annotation import Annotation
+
+        if os.path.isfile(json_path):
+            file_path = os.path.join(self.mainwindow.image_root, filename)
+            try:
+                img = Image.open(file_path)
+                img_area = img.width * img.height
+                annotation = Annotation(file_path, json_path)
+                annotation.load_annotation()
+
+                file_has = False
+                for obj in annotation.objects:
+                    if filter_cats and obj.category not in filter_cats:
+                        continue
+                    obj_pct = (obj.area / img_area) * 100.0 if img_area > 0 else 0
+                    if obj_pct < threshold_pct:
+                        self._small_scan_total += 1
+                        file_has = True
+                if file_has:
+                    self._small_scan_affected += 1
+            except Exception:
+                pass
+
+        # 更新 UI
+        if (i + 1) % 10 == 0 or (i + 1) == total:
+            self.processbar.setValue(i + 1)
+            self.status_label.setText(
+                f"Scanning... {i + 1}/{total}  "
+                f"(found {self._small_scan_total} small masks so far)"
+            )
+            QtWidgets.QApplication.processEvents()
+
+        QTimer.singleShot(1, self._process_small_scan_next)
+
+    def _show_small_scan_result(self):
+        """扫描完成后弹出确认对话框。"""
+        total_candidates = self._small_scan_total
+        affected_files = self._small_scan_affected
+        params = self._small_scan_params
+        threshold_pct = params["threshold_pct"]
+        filter_cats = params["filter_cats"]
+        filter_cat = ", ".join(sorted(filter_cats)) if filter_cats else ""
+
+        if total_candidates == 0:
+            self._enable_buttons()
+            QtWidgets.QMessageBox.information(
+                self.mainwindow, "Info",
+                f"No small masks found in #{params['start_1']}–#{params['end_1']} "
+                f"below {threshold_pct}%."
+                + (f" (category: {filter_cat})" if filter_cat else "")
+            )
+            return
+
+        reply = QtWidgets.QMessageBox.warning(
+            self.mainwindow, "⚠ Delete Small Masks",
+            f"Found {total_candidates} small mask(s) in {affected_files} file(s)\n"
+            f"in #{params['start_1']}–#{params['end_1']} below {threshold_pct}%."
+            + (f"\nCategory filter: {filter_cat}" if filter_cat else "\n(all categories)")
+            + f"\n\nDelete them now? This cannot be undone.",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.No,
+        )
+        if reply != QtWidgets.QMessageBox.Yes:
+            self._enable_buttons()
+            return
+
+        # ---- 启动异步删除阶段 ----
+        self._batch_files = self._small_scan_files
+        self._batch_index = 0
+        self._batch_running = True
+        self._total_masks = total_candidates
+        self._total_objects = 0
+        self._delete_small_mode = True
+        self._delete_small_data = {
+            "threshold_pct": threshold_pct,
+            "filter_cats": filter_cats,
+            "label_root": params["label_root"],
+            "actual_removed": 0,
+            "actual_files": 0,
+        }
+        self.result_table.setRowCount(0)
+        self.processbar.setMaximum(len(self._small_scan_files))
+        self.processbar.setValue(0)
+
+        QTimer.singleShot(50, self._process_next)
+
+    def _process_small_delete(self, filename: str):
+        """处理单张图片的小 mask 删除（由 _process_next 调用）。"""
+        data = self._delete_small_data
+        label_root = data["label_root"]
+        threshold_pct = data["threshold_pct"]
+        filter_cats = data["filter_cats"]
+
+        base = ".".join(filename.split(".")[:-1])
+        json_path = os.path.join(label_root, base + ".json")
+        if not os.path.isfile(json_path):
+            return 0
+
+        file_path = os.path.join(self.mainwindow.image_root, filename)
+        from PIL import Image
+        from ISAT.annotation import Annotation
+
+        try:
+            img = Image.open(file_path)
+            img_area = img.width * img.height
+        except Exception:
+            return 0
+
+        annotation = Annotation(file_path, json_path)
+        annotation.load_annotation()
+
+        kept = []
+        removed = 0
+        for obj in annotation.objects:
+            if filter_cats and obj.category not in filter_cats:
+                kept.append(obj)
+                continue
+            obj_pct = (obj.area / img_area) * 100.0 if img_area > 0 else 0
+            if obj_pct < threshold_pct:
+                removed += 1
+            else:
+                kept.append(obj)
+
+        if removed > 0:
+            annotation.objects = kept
+            annotation.save_annotation()
+
+        return removed
+
     def _process_next(self):
         if not self._batch_running or self._batch_index >= len(self._batch_files):
             self._finish()
@@ -579,8 +823,16 @@ class SAM3TextPromptPlugin(PluginBase):
         QtWidgets.QApplication.processEvents()
 
         try:
-            # 分支: range 全图标注模式 vs SAM3 text-prompt 模式
-            if getattr(self, '_range_mode', False):
+            # 分支: delete_small / range 全图标注 / SAM3 text-prompt
+            if getattr(self, '_delete_small_mode', False):
+                removed = self._process_small_delete(filename)
+                self._delete_small_data["actual_removed"] += removed
+                if removed > 0:
+                    self._delete_small_data["actual_files"] += 1
+                mode_tag = "[DelSmall]"
+                num_masks = removed
+                num_objects = removed
+            elif getattr(self, '_range_mode', False):
                 num_masks, num_objects = self._predict_range_single_image(
                     file_path, filename
                 )
@@ -760,19 +1012,31 @@ class SAM3TextPromptPlugin(PluginBase):
 
     def _finish(self):
         self._batch_running = False
+
+        if getattr(self, '_delete_small_mode', False):
+            data = self._delete_small_data
+            self.status_label.setText(
+                f"Deleted {data['actual_removed']} small mask(s) "
+                f"from {data['actual_files']} file(s)."
+            )
+        else:
+            self.status_label.setText(
+                f"Done: {len(self._batch_files)} images, "
+                f"{self._total_masks} masks, {self._total_objects} objects."
+            )
+
         self._range_mode = False
+        self._delete_small_mode = False
         self._enable_buttons()
         if self.mainwindow.current_index is not None:
             self.mainwindow.show_image(self.mainwindow.current_index, zoomfit=False)
-        self.status_label.setText(
-            f"Done: {len(self._batch_files)} images, "
-            f"{self._total_masks} masks, {self._total_objects} objects."
-        )
 
     def stop(self):
         self._batch_running = False
+        self._small_scan_mode = False
         self.status_label.setText("Stopping ...")
         self.stop_btn.setEnabled(False)
+        self._enable_buttons()
 
     # ==================================================================
     # Events
@@ -784,6 +1048,7 @@ class SAM3TextPromptPlugin(PluginBase):
         self.predict_resume_btn.setEnabled(True)
         self.range_annotate_btn.setEnabled(True)
         self.range_delete_btn.setEnabled(True)
+        self.delete_small_btn.setEnabled(True)
 
         # 同步 range spinbox 上限到当前图片总数
         total = len(self.mainwindow.files_list)
