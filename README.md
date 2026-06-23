@@ -7,28 +7,27 @@ pip install -e .
 
 启动 ISAT，在右侧板会有 **SAM3TextPromptPlugin** ，可以点击最小化窗口单独拉出来
 
-> **前置条件:** ISAT 中需已加载 SAM3 模型（SAM1/SAM2 不支持文本提示）。
+> **前置条件:** ISAT 中需已加载 SAM3 模型（SAM1/SAM2 不支持文本提示）
 
 ---
 
 
-## 各栏目详解
+## 各栏目功能
 
 ### Row 1 — 当前图片操作
 
-**Predict Current** 对当前打开的这张图片执行 SAM3 文本提示预测。类别取自 Row 2 的 `Cat:` 输入框。 |
-**Stop** 停止正在进行的批量任务（扫描/预测/删除）。 |
+**Predict Current** 对当前打开的这张图片执行 SAM3 文本提示预测。类别取自 Row 2 的 `Cat:` 输入框。
 
-> `Predict Current` 不依赖 `From #` / `To #` 范围设置。
+**Stop** 停止正在进行的批量任务（扫描/预测/删除）。
+
+> `Predict Current` 不依赖 `From #` / `To #` 范围设置
 
 ---
 
 ### Row 2 — 范围设置 & 类别输入
 
-**From #** 起始编号（1-based）。例如填 `5` 表示从第 5 张图开始。 |
-**To #** 结束编号（1-based，含）。例如填 `20` 表示到第 20 张图为止。 |
-
-> 编号对应 ISAT 文件列表中的顺序。开图时自动同步上限。
+**From #** 起始编号（1-based）。例如填 `5` 表示从第 5 张图开始。
+**To #** 结束编号（1-based，含）。例如填 `20` 表示到第 20 张图为止。
 
 #### Cat:（统一类别输入框）
 
@@ -41,9 +40,11 @@ pip install -e .
 
 例：
 ```
-Cat:  grass, green vegetation
-Map:  grass:lawn, green vegetation:lawn
+Cat:  grass, lawn, soil, fence, person
+Map:  grass:lawn, person:__background__
 ```
+
+> Cat 中的词需要符合大模型的理解，如业务场景中的 tallgrass, hardroad 类别，与广义的词语含义不同，应避免使用
 
 - **多对一支持:** 多个检测词可映射到同一个 label。
 - **留空 = 不映射:** 检测词直接作为保存的 label。
@@ -55,13 +56,13 @@ Map:  grass:lawn, green vegetation:lawn
 
 所有按钮都受 `From #` / `To #` 范围限制。
 
- **Predict Range** 🔵  对范围内**所有图片**执行 SAM3 文本提示预测。新的 mask **追加**在已有标注之上，不覆盖旧标注。
+ **Predict Range** 🔵 对范围内**所有图片**执行 SAM3 文本提示预测。新的 mask **追加**在已有标注之上，不覆盖旧标注。
  
- **Resume Range**  🟢  对范围内**尚无标注文件的图片**执行预测。已有 `.json` 标注的图片自动跳过。适合中断后继续。
+ **Resume Range** 🟢 对范围内**尚无标注文件的图片**执行预测。已有 `.json` 标注的图片自动跳过。适合中断后继续。
  
- **Annotate Range**  🟠  将范围内每张图片**整个画面区域**标注为 `Cat:` 中指定的类别。已有标注会被**替换**。不调用 SAM3。
+ **Annotate Range** 🟠 将范围内每张图片**整个画面区域**标注为 `Cat:` 中指定的类别。已有标注会被**替换**。不调用 SAM3。
  
- **Delete Range**  🔴  **删除**范围内所有图片的 `.json` 标注文件。不可逆，二次确认。
+ **Delete Range** 🔴 **删除**范围内所有图片的 `.json` 标注文件。不可逆，二次确认。
 
 ---
 
@@ -82,14 +83,14 @@ Map:  grass:lawn, green vegetation:lawn
 
 #### Delete Small Masks 按钮
 
-**Delete Small Masks**  🟣 异步扫描 → 弹出统计 → 确认后异步删除。全程不阻塞 UI，可随时 Stop 中断。 |
+**Delete Small Masks** 🟣 扫描 → 弹出统计 → 确认后删除。
 
 ---
 
 
 ## 常见问题
 
-### Qt 平台插件错误 (Linux)
+### Qt 平台插件错误
 
 如果在 Linux 上遇到以下错误:
 
@@ -100,22 +101,10 @@ This application failed to start because no Qt platform plugin could be initiali
 
 **原因:** `opencv-python` (完整版) 自带的 `cv2/qt/plugins/` 目录中的 Qt 插件与系统 PyQt5 冲突。
 
-**解决方法 (任选其一):**
-
-1. **替换为 headless 版本 (推荐):**
+**解决方法: 替换为 headless 版本**
    ```bash
    pip uninstall opencv-python -y
    pip install opencv-python-headless
-   ```
-
-2. **临时删除 opencv 的 Qt 插件目录:**
-   ```bash
-   rm -rf $(python -c "import cv2, os; print(os.path.join(os.path.dirname(cv2.__file__), 'qt'))")
-   ```
-
-3. **设置环境变量指向系统 Qt 插件:**
-   ```bash
-   export QT_QPA_PLATFORM_PLUGIN_PATH=/usr/lib/x86_64-linux-gnu/qt5/plugins/platforms
    ```
 
 #### 缺少 xcb 库
