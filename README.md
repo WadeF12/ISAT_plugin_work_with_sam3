@@ -16,8 +16,8 @@ pip install -e .
 
 ### Row 1 — 当前图片操作
 
-| **Predict Current** | 对当前打开的这张图片执行 SAM3 文本提示预测。类别取自 Row 2 的 `Cat:` 输入框。 |
-| **Stop** | 停止正在进行的批量任务（扫描/预测/删除）。 |
+**Predict Current** 对当前打开的这张图片执行 SAM3 文本提示预测。类别取自 Row 2 的 `Cat:` 输入框。 |
+**Stop** 停止正在进行的批量任务（扫描/预测/删除）。 |
 
 > `Predict Current` 不依赖 `From #` / `To #` 范围设置。
 
@@ -25,24 +25,21 @@ pip install -e .
 
 ### Row 2 — 范围设置 & 类别输入
 
-#### From # / To #
-
-| **From #** | 起始编号（1-based）。例如填 `5` 表示从第 5 张图开始。 |
-| **To #** | 结束编号（1-based，含）。例如填 `20` 表示到第 20 张图为止。 |
+**From #** 起始编号（1-based）。例如填 `5` 表示从第 5 张图开始。 |
+**To #** 结束编号（1-based，含）。例如填 `20` 表示到第 20 张图为止。 |
 
 > 编号对应 ISAT 文件列表中的顺序。开图时自动同步上限。
 
 #### Cat:（统一类别输入框）
 
-所有操作的类别来源，**逗号分隔**多个类别。
+用于 sam3 识别的类别词，**逗号分隔**多个类别。
 
-| SAM3 文本提示 | `car, person, tree` | SAM3 分别用每个词做 text-prompt 检测 |
-| Annotate Range | `background` | 只取第一个类别作为全图标注类别 |
 
 #### Map:（标签映射，选填）
 
 格式：`检测词:保存标签`，逗号分隔。
 
+例：
 ```
 Cat:  grass/leaves, green vegetation
 Map:  grass/leaves:lawn, green vegetation:lawn
@@ -58,11 +55,10 @@ Map:  grass/leaves:lawn, green vegetation:lawn
 
 所有按钮都受 `From #` / `To #` 范围限制。
 
-
-| **Predict Range** | 🔵 蓝 |对范围内**所有图片**执行 SAM3 文本提示预测。新的 mask **追加**在已有标注之上，不覆盖旧标注。 |
-| **Resume Range** | 🟢 绿 | 对范围内**尚无标注文件的图片**执行预测。已有 `.json` 标注的图片自动跳过。适合中断后继续。 |
-| **Annotate Range** | 🟠 橙 | 将范围内每张图片**整个画面区域**标注为 `Cat:` 中指定的类别。已有标注会被**替换**。不调用 SAM3。 |
-| **Delete Range** | 🔴 红 | **删除**范围内所有图片的 `.json` 标注文件。不可逆，二次确认。 |
+ **Predict Range** 🔵  对范围内**所有图片**执行 SAM3 文本提示预测。新的 mask **追加**在已有标注之上，不覆盖旧标注。
+ **Resume Range**  🟢  对范围内**尚无标注文件的图片**执行预测。已有 `.json` 标注的图片自动跳过。适合中断后继续。
+ **Annotate Range**  🟠  将范围内每张图片**整个画面区域**标注为 `Cat:` 中指定的类别。已有标注会被**替换**。不调用 SAM3。
+ **Delete Range**  🔴  **删除**范围内所有图片的 `.json` 标注文件。不可逆，二次确认。
 
 ---
 
@@ -83,12 +79,7 @@ Map:  grass/leaves:lawn, green vegetation:lawn
 
 #### Delete Small Masks 按钮
 
-| **Delete Small Masks** | 🟣 紫 | 异步扫描 → 弹出统计 → 确认后异步删除。全程不阻塞 UI，可随时 Stop 中断。 |
-
-**流程:**
-1. 异步逐文件扫描（进度条实时更新）
-2. 弹出确认框，显示找到的小 mask 数量
-3. 确认后异步逐文件删除
+**Delete Small Masks**  🟣 异步扫描 → 弹出统计 → 确认后异步删除。全程不阻塞 UI，可随时 Stop 中断。 |
 
 ---
 
