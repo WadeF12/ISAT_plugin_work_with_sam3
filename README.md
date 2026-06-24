@@ -8,7 +8,6 @@ pip install -e .
 
 启动 ISAT，在右侧板会有 **SAM3TextPromptPlugin** ，可以点击最小化窗口单独拉出来
 
-> 使用推理功能时，ISAT 中需加载 SAM3 模型（SAM1/SAM2 不支持文本提示）
 
 ---
 
@@ -17,18 +16,17 @@ pip install -e .
 
 ### Row 1 — 当前图片操作
 
-**Predict Current** 对当前打开的这张图片执行 SAM3 文本提示预测。类别取自 Row 2 的 `Cat:` 输入框。
+**Predict Current** 对当前打开的这张图片执行 SAM3 文本提示预测，类别取自 Row 2 的 `Cat:` 输入框
 
-**Stop** 停止正在进行的批量任务（扫描/预测/删除）。
+> 使用推理功能时，ISAT 中需加载 SAM3 模型（SAM1/SAM2 不支持文本提示）。`Predict Current` 不依赖 `From #` / `To #` 范围设置
 
-> `Predict Current` 不依赖 `From #` / `To #` 范围设置
+**Stop** 停止正在进行的批量任务（扫描/预测/删除）
 
 ---
 
 ### Row 2 — 范围设置 & 类别输入
 
-**From #** 起始编号（1-based）。例如填 `5` 表示从第 5 张图开始。
-**To #** 结束编号（1-based，含）。例如填 `20` 表示到第 20 张图为止。
+**From #** 起始编号（1-based）**To #** 结束编号（1-based，含）：用于设置操作的图片编号范围
 
 #### Cat:（统一类别输入框）
 
@@ -57,13 +55,13 @@ Map:  grass:lawn, person:__background__
 
 所有按钮都受 `From #` / `To #` 范围限制。
 
- **Predict Range** 🔵 对范围内**所有图片**执行 SAM3 文本提示预测。新的 mask **追加**在已有标注之上，不覆盖旧标注。
+ 🟦**Predict Range**🟦 对范围内**所有图片**执行 SAM3 文本提示预测。新的 mask **追加**在已有标注之上，不覆盖旧标注
  
- **Resume Range** 🟢 对范围内**尚无标注文件的图片**执行预测。已有 `.json` 标注的图片自动跳过。适合中断后继续。
+ 🟩**Resume Range**🟩 对范围内**尚无标注文件的图片**执行预测。已有 `.json` 标注的图片自动跳过
  
- **Annotate Range** 🟠 将范围内每张图片**整个画面区域**标注为 `Cat:` 中指定的类别。已有标注会被**替换**。不调用 SAM3。
+ 🟧**Annotate Range**🟧 将范围内每张图片**整个画面区域**标注为 `Cat:` 中指定的类别。已有标注会被**替换**。不调用 SAM3
  
- **Delete Range** 🔴 **删除**范围内所有图片的 `.json` 标注文件。不可逆，二次确认。
+ 🟥**Delete Range**🟥 **删除**范围内所有图片的 `.json` 标注文件
 
 ---
 
@@ -71,20 +69,20 @@ Map:  grass:lawn, person:__background__
 
 #### Threshold:
 
-面积阈值百分比。mask 面积 ÷ 图片总像素 × 100% 低于此值的 mask 将被视为「小 mask」。
+面积阈值百分比。mask 面积 ÷ 图片总像素 × 100% 低于此值的 mask 将被视为「小 mask」
 
 > 例如设为 `2.00%`，一张 1920×1080 的图上面积小于 41,472 像素的 mask 会被删除。
 
 #### Cat:
 
-类别过滤（选填）。只删除**特定类别**的小 mask。逗号分隔多个类别。
+类别过滤（选填）。只删除**特定类别**的小 mask。逗号分隔多个类别
 
 - 填 `person` → 只删除 person 类的小 mask
 - 留空 → 删除**所有类别**的小 mask
 
 #### Delete Small Masks 按钮
 
-**Delete Small Masks** 🟣 扫描 → 弹出统计 → 确认后删除。
+🟪**Delete Small Masks**🟪 扫描 → 弹出统计 → 确认后删除
 
 ---
 
