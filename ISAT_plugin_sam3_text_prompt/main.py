@@ -12,173 +12,11 @@ Core API (from ISAT mainwindow.py):
 import os
 from typing import List
 
-from PyQt5 import QtCore, QtGui, QtWidgets
+from PyQt5 import QtCore, QtWidgets
 from PyQt5.QtCore import QTimer
 
 from ISAT.widgets.plugin_base import PluginBase
 
-
-# ==================================================================
-# Proportional Region Widget — draggable 4-corner region mapper
-# ==================================================================
-
-class ProportionalRegionWidget(QtWidgets.QWidget):
-    """A widget displaying a proportional rectangle with 4 draggable corner handles.
-
-    The rectangle aspect ratio matches the target image. Users drag the 4
-    corner points to define a quadrilateral region. The proportional
-    coordinates (0~1 range) are later mapped to actual image pixels.
-    """
-
-    HANDLE_RADIUS = 7
-    DEFAULT_AR = 4.0 / 3.0
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        # 4 handles in proportional coords (0~1), clockwise from top-left
-        self._handles = [
-            QtCore.QPointF(0.0, 0.0),   # top-left
-            QtCore.QPointF(1.0, 0.0),   # top-right
-            QtCore.QPointF(1.0, 1.0),   # bottom-right
-            QtCore.QPointF(0.0, 1.0),   # bottom-left
-        ]
-        self._active_handle = -1
-        self._aspect_ratio = self.DEFAULT_AR
-        self.setMinimumHeight(80)
-        self.setMouseTracking(True)
-
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
-
-    def set_aspect_ratio(self, w: int, h: int):
-        """Update the target aspect ratio (w / h)."""
-        if h > 0:
-            self._aspect_ratio = float(w) / float(h)
-        self.update()
-
-    def get_proportional_points(self):
-        """Return 4 handles as [(rx, ry), ...] in 0~1 proportional coords."""
-        return [(p.x(), p.y()) for p in self._handles]
-
-    def reset_to_corners(self):
-        """Reset all 4 handles to the four corners."""
-        self._handles = [
-            QtCore.QPointF(0.0, 0.0),
-            QtCore.QPointF(1.0, 0.0),
-            QtCore.QPointF(1.0, 1.0),
-            QtCore.QPointF(0.0, 1.0),
-        ]
-        self.update()
-
-    def sizeHint(self):
-        return QtCore.QSize(320, 240)
-
-    # ------------------------------------------------------------------
-    # Coordinate conversion
-    # ------------------------------------------------------------------
-
-    def _widget_to_prop(self, wx: float, wy: float) -> QtCore.QPointF:
-        """Convert widget pixel coords to proportional (0~1)."""
-        pw, ph = self.width(), self.height()
-        if pw <= 0 or ph <= 0:
-            return QtCore.QPointF(0, 0)
-        return QtCore.QPointF(
-            max(0.0, min(1.0, wx / pw)),
-            max(0.0, min(1.0, wy / ph)),
-        )
-
-    def _prop_to_widget(self, px: float, py: float) -> QtCore.QPointF:
-        """Convert proportional coords (0~1) to widget pixel coords."""
-        return QtCore.QPointF(px * self.width(), py * self.height())
-
-    def _find_handle(self, pos: QtCore.QPoint) -> int:
-        """Return index of handle near pos, or -1."""
-        hit_dist = (self.HANDLE_RADIUS * 2) ** 2
-        for i, h in enumerate(self._handles):
-            wp = self._prop_to_widget(h.x(), h.y())
-            dx = pos.x() - wp.x()
-            dy = pos.y() - wp.y()
-            if dx * dx + dy * dy <= hit_dist:
-                return i
-        return -1
-
-    # ------------------------------------------------------------------
-    # Paint
-    # ------------------------------------------------------------------
-
-    def paintEvent(self, event):
-        painter = QtGui.QPainter(self)
-        painter.setRenderHint(QtGui.QPainter.Antialiasing)
-
-        w, h = self.width(), self.height()
-
-        # Background rect
-        painter.setPen(QtGui.QPen(QtGui.QColor("#666666"), 1))
-        painter.setBrush(QtGui.QColor("#2d2d2d"))
-        painter.drawRect(0, 0, w - 1, h - 1)
-
-        # Map handles to pixel coords
-        pts = [self._prop_to_widget(p.x(), p.y()) for p in self._handles]
-
-        # Semi-transparent filled quadrilateral
-        poly = QtGui.QPolygonF(pts)
-        fill = QtGui.QColor("#0078D4")
-        fill.setAlpha(50)
-        painter.setBrush(fill)
-        painter.setPen(QtGui.QPen(QtGui.QColor("#0078D4"), 2))
-        painter.drawPolygon(poly)
-
-        # Dashed border lines
-        dash_pen = QtGui.QPen(QtGui.QColor("#00B7C3"), 2, QtCore.Qt.DashLine)
-        for i in range(4):
-            painter.setPen(dash_pen)
-            painter.drawLine(pts[i], pts[(i + 1) % 4])
-
-        # Corner handles
-        for i, pt in enumerate(pts):
-            if i == self._active_handle:
-                painter.setBrush(QtGui.QColor("#FF6B00"))
-                painter.setPen(QtGui.QPen(QtGui.QColor("#FF6B00"), 2))
-            else:
-                painter.setBrush(QtGui.QColor("#00B7C3"))
-                painter.setPen(QtGui.QPen(QtCore.Qt.white, 1))
-            painter.drawEllipse(pt, self.HANDLE_RADIUS, self.HANDLE_RADIUS)
-
-        painter.end()
-
-    # ------------------------------------------------------------------
-    # Mouse interaction
-    # ------------------------------------------------------------------
-
-    def mousePressEvent(self, event):
-        if event.button() == QtCore.Qt.LeftButton:
-            self._active_handle = self._find_handle(event.pos())
-            if self._active_handle >= 0:
-                self.setCursor(QtCore.Qt.ClosedHandCursor)
-            self.update()
-
-    def mouseMoveEvent(self, event):
-        if self._active_handle >= 0:
-            prop = self._widget_to_prop(event.x(), event.y())
-            self._handles[self._active_handle] = prop
-            self.update()
-        else:
-            h = self._find_handle(event.pos())
-            self.setCursor(
-                QtCore.Qt.OpenHandCursor if h >= 0 else QtCore.Qt.ArrowCursor
-            )
-
-    def mouseReleaseEvent(self, event):
-        if event.button() == QtCore.Qt.LeftButton:
-            self._active_handle = -1
-            self.setCursor(QtCore.Qt.ArrowCursor)
-            self.update()
-
-
-# ==================================================================
-# Plugin
-# ==================================================================
 
 class SAM3TextPromptPlugin(PluginBase):
     """SAM3 text-prompt batch auto annotation plugin."""
@@ -200,13 +38,8 @@ class SAM3TextPromptPlugin(PluginBase):
         self._small_scan_total = 0
         self._small_scan_affected = 0
         self._small_scan_params = {}
-        self._region_mode = False
-        self._region_label = ""
-        self._region_layer_bottom = True  # True=bottom, False=top
-        self._remap_mode = False
-        self._remap_source_cat = ""
-        self._remap_target_cat = ""
-        self._remap_threshold_pct = 0.0
+        self._merge_mode = False
+        self._merge_category = ""
         self.default_prompts = "person, car"
 
     # ==================================================================
@@ -388,12 +221,6 @@ class SAM3TextPromptPlugin(PluginBase):
         layout.addWidget(self.range_delete_btn)
         main_layout.addWidget(row)
 
-        # ---- separator ----
-        sep = QtWidgets.QFrame()
-        sep.setFrameShape(QtWidgets.QFrame.HLine)
-        sep.setFrameShadow(QtWidgets.QFrame.Sunken)
-        main_layout.addWidget(sep)
-
         # ---- row 4: delete small masks ----
         row = QtWidgets.QWidget()
         row.setMaximumHeight(36)
@@ -435,162 +262,32 @@ class SAM3TextPromptPlugin(PluginBase):
         layout.addStretch()
         main_layout.addWidget(row)
 
-        # ---- separator ----
-        sep = QtWidgets.QFrame()
-        sep.setFrameShape(QtWidgets.QFrame.HLine)
-        sep.setFrameShadow(QtWidgets.QFrame.Sunken)
-        main_layout.addWidget(sep)
-
-        # ---- row 4.5: small mask remap ----
+        # ---- row 5: merge same category masks ----
         row = QtWidgets.QWidget()
         row.setMaximumHeight(36)
         layout = QtWidgets.QHBoxLayout(row)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        layout.addWidget(QtWidgets.QLabel("Remap:"))
-        self.remap_source_edit = QtWidgets.QLineEdit()
-        self.remap_source_edit.setPlaceholderText("source cat")
-        self.remap_source_edit.setToolTip(
-            "Source category: masks of this category below the threshold will be remapped."
+        layout.addWidget(QtWidgets.QLabel("Merge Cat:"))
+        self.merge_category_edit = QtWidgets.QLineEdit()
+        self.merge_category_edit.setPlaceholderText("e.g. person")
+        self.merge_category_edit.setToolTip(
+            "Merge all masks of this category into one mask per image.\n"
+            "Operates on the selected range (From # – To #)."
         )
-        layout.addWidget(self.remap_source_edit)
+        layout.addWidget(self.merge_category_edit)
 
-        layout.addWidget(QtWidgets.QLabel("<"))
-        self.remap_threshold_spin = QtWidgets.QDoubleSpinBox()
-        self.remap_threshold_spin.setRange(0.01, 100.0)
-        self.remap_threshold_spin.setValue(1.0)
-        self.remap_threshold_spin.setDecimals(2)
-        self.remap_threshold_spin.setSuffix("%")
-        self.remap_threshold_spin.setToolTip(
-            "Masks of the source category with area < this % of image area will be remapped."
+        self.merge_btn = QtWidgets.QPushButton("Merge Same Category")
+        self.merge_btn.setToolTip(
+            "For each image in the range, merge all masks of the\n"
+            "specified category into a single mask (union)."
         )
-        layout.addWidget(self.remap_threshold_spin)
-
-        layout.addWidget(QtWidgets.QLabel("→"))
-        self.remap_target_edit = QtWidgets.QLineEdit()
-        self.remap_target_edit.setPlaceholderText("target cat")
-        self.remap_target_edit.setToolTip(
-            "Target category: small masks will be relabeled to this category.\n"
-            "Supports Map: mapping."
-        )
-        layout.addWidget(self.remap_target_edit)
-
-        self.remap_btn = QtWidgets.QPushButton("Remap")
-        self.remap_btn.setToolTip(
-            "Scan the From # – To # range and remap small masks\n"
-            "of the source category to the target category."
-        )
-        self.remap_btn.clicked.connect(self._remap_small_masks)
-        self.remap_btn.setStyleSheet(
-            "QPushButton { background-color: #C239B3; color: white; "
-            "font-weight: bold; padding: 4px 12px; }"
-        )
-        layout.addWidget(self.remap_btn)
-        layout.addStretch()
-        main_layout.addWidget(row)
-
-        # ---- separator ----
-        sep = QtWidgets.QFrame()
-        sep.setFrameShape(QtWidgets.QFrame.HLine)
-        sep.setFrameShadow(QtWidgets.QFrame.Sunken)
-        main_layout.addWidget(sep)
-
-        # ---- row 5: region label + layer dropdown ----
-        row = QtWidgets.QWidget()
-        row.setMaximumHeight(36)
-        layout = QtWidgets.QHBoxLayout(row)
-        layout.setContentsMargins(0, 0, 0, 0)
-
-        layout.addWidget(QtWidgets.QLabel("Region Label:"))
-        self.region_label_edit = QtWidgets.QLineEdit()
-        self.region_label_edit.setPlaceholderText("e.g. background")
-        self.region_label_edit.setToolTip(
-            "Category name for the mapped region mask.\n"
-            "Supports Map: mapping."
-        )
-        layout.addWidget(self.region_label_edit)
-
-        layout.addWidget(QtWidgets.QLabel("Layer:"))
-        self.region_layer_combo = QtWidgets.QComboBox()
-        self.region_layer_combo.addItems(["追加-最底层", "追加-最上层"])
-        self.region_layer_combo.setToolTip(
-            "Bottom: place region mask behind all existing objects.\n"
-            "Top: place region mask on top of all existing objects."
-        )
-        layout.addWidget(self.region_layer_combo)
-        layout.addStretch()
-        main_layout.addWidget(row)
-
-        # ---- row 5.5: region aspect ratio config ----
-        row = QtWidgets.QWidget()
-        row.setMaximumHeight(36)
-        layout = QtWidgets.QHBoxLayout(row)
-        layout.setContentsMargins(0, 0, 0, 0)
-
-        layout.addWidget(QtWidgets.QLabel("W:"))
-        self.region_ratio_w_spin = QtWidgets.QSpinBox()
-        self.region_ratio_w_spin.setRange(1, 99999)
-        self.region_ratio_w_spin.setValue(640)
-        self.region_ratio_w_spin.setToolTip("Reference image width for aspect ratio")
-        layout.addWidget(self.region_ratio_w_spin)
-
-        layout.addWidget(QtWidgets.QLabel("H:"))
-        self.region_ratio_h_spin = QtWidgets.QSpinBox()
-        self.region_ratio_h_spin.setRange(1, 99999)
-        self.region_ratio_h_spin.setValue(480)
-        self.region_ratio_h_spin.setToolTip("Reference image height for aspect ratio")
-        layout.addWidget(self.region_ratio_h_spin)
-
-        self.region_ratio_update_btn = QtWidgets.QPushButton("Update Ratio")
-        self.region_ratio_update_btn.setToolTip(
-            "Apply the W:H ratio to the region rectangle below.\n"
-            "Height is fixed; width adjusts to match the ratio."
-        )
-        self.region_ratio_update_btn.clicked.connect(self._update_region_ratio)
-        layout.addWidget(self.region_ratio_update_btn)
-        layout.addStretch()
-        main_layout.addWidget(row)
-
-        # ---- row 6: proportional region widget (centered) ----
-        row = QtWidgets.QWidget()
-        layout = QtWidgets.QHBoxLayout(row)
-        layout.setContentsMargins(0, 0, 0, 0)
-
-        self.region_widget = ProportionalRegionWidget()
-        self.region_widget.setToolTip(
-            "Drag the 4 cyan corner points to define the region.\n"
-            "The rectangle ratio matches the W:H values above.\n"
-            "The defined quadrilateral is mapped onto each image in the range."
-        )
-        REGION_H = 237
-        self.region_widget.setFixedSize(316, REGION_H)  # 316 = 237*(640/480)
-        self.region_widget.setSizePolicy(
-            QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed
-        )
-
-        layout.addStretch()
-        layout.addWidget(self.region_widget)
-        layout.addStretch()
-        main_layout.addWidget(row)
-
-        # ---- row 7: apply region button ----
-        row = QtWidgets.QWidget()
-        row.setMaximumHeight(36)
-        layout = QtWidgets.QHBoxLayout(row)
-        layout.setContentsMargins(0, 0, 0, 0)
-
-        self.apply_region_btn = QtWidgets.QPushButton("Apply Region")
-        self.apply_region_btn.setToolTip(
-            "Apply the defined quadrilateral region as a mask\n"
-            "to ALL images in the From # – To # range.\n"
-            "Appends the mask (does not replace existing annotations)."
-        )
-        self.apply_region_btn.clicked.connect(self._apply_region)
-        self.apply_region_btn.setStyleSheet(
+        self.merge_btn.clicked.connect(self.merge_same_category)
+        self.merge_btn.setStyleSheet(
             "QPushButton { background-color: #038387; color: white; "
             "font-weight: bold; padding: 4px 12px; }"
         )
-        layout.addWidget(self.apply_region_btn)
+        layout.addWidget(self.merge_btn)
         layout.addStretch()
         main_layout.addWidget(row)
 
@@ -684,8 +381,7 @@ class SAM3TextPromptPlugin(PluginBase):
         self.range_annotate_btn.setEnabled(False)
         self.range_delete_btn.setEnabled(False)
         self.delete_small_btn.setEnabled(False)
-        self.remap_btn.setEnabled(False)
-        self.apply_region_btn.setEnabled(False)
+        self.merge_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
 
     def _enable_buttons(self):
@@ -695,8 +391,7 @@ class SAM3TextPromptPlugin(PluginBase):
         self.range_annotate_btn.setEnabled(True)
         self.range_delete_btn.setEnabled(True)
         self.delete_small_btn.setEnabled(True)
-        self.remap_btn.setEnabled(True)
-        self.apply_region_btn.setEnabled(True)
+        self.merge_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
 
     def predict_current(self):
@@ -1146,6 +841,156 @@ class SAM3TextPromptPlugin(PluginBase):
 
         return removed
 
+    # ==================================================================
+    # Merge same-category masks
+    # ==================================================================
+
+    def merge_same_category(self):
+        """将范围内每张图片中同类别的所有 mask 合并为一个 mask（取并集）。"""
+        files, start_1, end_1 = self._resolve_range()
+        if files is None:
+            return
+
+        category = self.merge_category_edit.text().strip()
+        if not category:
+            QtWidgets.QMessageBox.warning(
+                self.mainwindow, "Input Error",
+                "Please enter a category name to merge."
+            )
+            return
+
+        reply = QtWidgets.QMessageBox.question(
+            self.mainwindow, "Confirm Merge",
+            f"Merge all \"{category}\" masks into one per image\n"
+            f"for #{start_1} – #{end_1} ({len(files)} images).\n\n"
+            f"All masks of category \"{category}\" in each image\n"
+            f"will be unioned into a single mask.\n\nContinue?",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+        )
+        if reply != QtWidgets.QMessageBox.Yes:
+            return
+
+        self._batch_files = files
+        self._batch_index = 0
+        self._batch_running = True
+        self._total_masks = 0
+        self._total_objects = 0
+        self._merge_mode = True
+        self._merge_category = category
+        self.result_table.setRowCount(0)
+        self.processbar.setMaximum(len(files))
+        self.processbar.setValue(0)
+
+        self._disable_buttons()
+        QTimer.singleShot(50, self._process_next)
+
+    def _process_merge_single_image(self, file_path: str, filename: str) -> tuple:
+        """对单张图片合并同类 mask。
+
+        使用 cv2 将所有同类别的 polygon 绘制到画布上取并集，
+        再把并集轮廓转换回 polygon 保存。
+        返回 (input_mask_count, output_object_count)。
+        """
+        import cv2
+        import numpy as np
+        from PIL import Image
+        from ISAT.annotation import Annotation, Object
+
+        label_path = os.path.join(
+            self.mainwindow.label_root,
+            ".".join(filename.split(".")[:-1]) + ".json"
+        )
+        if not os.path.isfile(label_path):
+            return 0, 0
+
+        annotation = Annotation(file_path, label_path)
+        annotation.load_annotation()
+
+        category = self._merge_category
+
+        # 收集同类 objects，保留其他类别的 objects
+        target_objs = []
+        other_objs = []
+        for obj in annotation.objects:
+            if obj.category == category:
+                target_objs.append(obj)
+            else:
+                other_objs.append(obj)
+
+        if len(target_objs) <= 1:
+            return len(target_objs), len(target_objs)
+
+        # 读取图像尺寸
+        img = Image.open(file_path)
+        w, h = img.size
+
+        # 将所有同类 polygon 绘制到空白画布上（白色填充）
+        canvas = np.zeros((h, w), dtype=np.uint8)
+        for obj in target_objs:
+            pts = np.array([[p[0], p[1]] for p in obj.segmentation],
+                           dtype=np.int32)
+            if len(pts) >= 3:
+                cv2.fillPoly(canvas, [pts], 255)
+
+        # 查找并集的外轮廓
+        contours, hierarchy = cv2.findContours(
+            canvas, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+        )
+
+        # 确定起始 group（取同类中最大的 group + 1）
+        group = 1
+        for obj in target_objs:
+            try:
+                group = max(group, int(obj.group) + 1)
+            except Exception:
+                pass
+
+        merged_count = 0
+        for contour in contours:
+            if len(contour) < 3:
+                continue
+
+            # 简化轮廓点，减少顶点数
+            epsilon = 1.0
+            approx = cv2.approxPolyDP(contour, epsilon, True)
+
+            segmentation = []
+            xmin, ymin = w, h
+            xmax, ymax = 0, 0
+            for point in approx:
+                x, y = point[0]
+                x, y = float(x), float(y)
+                x = max(0.0, x)
+                y = max(0.0, y)
+                xmin = min(x, xmin)
+                ymin = min(y, ymin)
+                xmax = max(x, xmax)
+                ymax = max(y, ymax)
+                segmentation.append((round(x, 2), round(y, 2)))
+
+            area = self._polygon_area(segmentation)
+            if area < 1.0:
+                continue
+
+            obj = Object(
+                category=category,
+                group=group,
+                segmentation=segmentation,
+                area=area,
+                layer=1 + len(other_objs) + merged_count,
+                bbox=(xmin, ymin, xmax, ymax),
+                iscrowd=False,
+                note="merged",
+            )
+            other_objs.append(obj)
+            merged_count += 1
+
+        # 保存
+        annotation.objects = other_objs
+        annotation.save_annotation()
+
+        return len(target_objs), merged_count
+
     def _process_next(self):
         if not self._batch_running or self._batch_index >= len(self._batch_files):
             self._finish()
@@ -1161,8 +1006,13 @@ class SAM3TextPromptPlugin(PluginBase):
         QtWidgets.QApplication.processEvents()
 
         try:
-            # 分支: delete_small / remap / range 全图标注 / region 比例映射 / SAM3
-            if getattr(self, '_delete_small_mode', False):
+            # 分支: merge / delete_small / range 全图标注 / SAM3 text-prompt
+            if getattr(self, '_merge_mode', False):
+                num_masks, num_objects = self._process_merge_single_image(
+                    file_path, filename
+                )
+                mode_tag = "[Merge]"
+            elif getattr(self, '_delete_small_mode', False):
                 removed = self._process_small_delete(filename)
                 self._delete_small_data["actual_removed"] += removed
                 if removed > 0:
@@ -1170,21 +1020,11 @@ class SAM3TextPromptPlugin(PluginBase):
                 mode_tag = "[DelSmall]"
                 num_masks = removed
                 num_objects = removed
-            elif getattr(self, '_remap_mode', False):
-                remapped = self._process_remap_single_image(file_path, filename)
-                mode_tag = "[Remap]"
-                num_masks = remapped
-                num_objects = remapped
             elif getattr(self, '_range_mode', False):
                 num_masks, num_objects = self._predict_range_single_image(
                     file_path, filename
                 )
                 mode_tag = "[Range]"
-            elif getattr(self, '_region_mode', False):
-                num_masks, num_objects = self._process_region_single_image(
-                    file_path, filename
-                )
-                mode_tag = "[Region]"
             else:
                 categories = self._get_categories()
                 num_masks, num_objects = self._predict_single_image(
@@ -1256,12 +1096,7 @@ class SAM3TextPromptPlugin(PluginBase):
         total_masks = 0
         total_objects = 0
 
-        # z-ordering: later prompts appear on top of earlier ones.
-        # Use a large layer stride so each prompt's masks occupy a
-        # contiguous block and never interleave with other prompts.
-        LAYER_STRIDE = 10000
-
-        for prompt_idx, category in enumerate(categories):
+        for category in categories:
             if not category or category == "__background__":
                 continue
 
@@ -1272,9 +1107,6 @@ class SAM3TextPromptPlugin(PluginBase):
             masks, scores = self.mainwindow.segany.predictor.predict_with_text_prompt(
                 image, category
             )
-
-            layer_base = 1 + prompt_idx * LAYER_STRIDE
-            local_obj_count = 0
 
             for mask in masks:
                 total_masks += 1
@@ -1302,13 +1134,12 @@ class SAM3TextPromptPlugin(PluginBase):
                     obj = Object(
                         category=save_label, group=group,
                         segmentation=segmentation, area=area,
-                        layer=layer_base + local_obj_count,
+                        layer=1 + len(annotation.objects) + len([obj for _ in []]),
                         bbox=(xmin, ymin, xmax, ymax),
                         iscrowd=False, note="",
                     )
                     annotation.objects.append(obj)
                     total_objects += 1
-                    local_obj_count += 1
 
                 if self.mainwindow.group_select_mode == "auto":
                     group += 1
@@ -1367,224 +1198,6 @@ class SAM3TextPromptPlugin(PluginBase):
             area += x1 * y2 - x2 * y1
         return abs(area) / 2
 
-    # ==================================================================
-    # Proportional Region Mapping
-    # ==================================================================
-
-    def _update_region_ratio(self):
-        """Update the rectangle widget size to match the W:H ratio inputs.
-
-        Height is fixed (237 px); width = 237 * (W / H).
-        """
-        w = self.region_ratio_w_spin.value()
-        h = self.region_ratio_h_spin.value()
-        FIXED_H = 237
-        new_w = max(20, int(FIXED_H * w / h)) if h > 0 else FIXED_H
-        self.region_widget.setFixedSize(new_w, FIXED_H)
-        self.region_widget.set_aspect_ratio(w, h)
-
-    def _apply_region(self):
-        """Apply proportional region quadrilateral as mask to From/To range."""
-        files, start_1, end_1 = self._resolve_range()
-        if files is None:
-            return
-
-        label = self.region_label_edit.text().strip()
-        if not label:
-            QtWidgets.QMessageBox.warning(
-                self.mainwindow, "Input Error",
-                "Please enter a label for the region mask."
-            )
-            return
-
-        layer_mode = "最底层" if self.region_layer_combo.currentIndex() == 0 else "最上层"
-
-        reply = QtWidgets.QMessageBox.question(
-            self.mainwindow, "Confirm Apply Region",
-            f"Apply region mask to images #{start_1} – #{end_1} ({len(files)} images)\n"
-            f"Label: \"{label}\"\n"
-            f"Layer: {layer_mode}\n\n"
-            f"The region mask will be APPENDED to existing annotations.\nContinue?",
-            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
-        )
-        if reply != QtWidgets.QMessageBox.Yes:
-            return
-
-        self._batch_files = files
-        self._batch_index = 0
-        self._batch_running = True
-        self._total_masks = 0
-        self._total_objects = 0
-        self._region_mode = True
-        self._region_label = label
-        self._region_layer_bottom = (self.region_layer_combo.currentIndex() == 0)
-        self.result_table.setRowCount(0)
-        self.processbar.setMaximum(len(files))
-        self.processbar.setValue(0)
-
-        self._disable_buttons()
-        QTimer.singleShot(50, self._process_next)
-
-    def _process_region_single_image(self, file_path: str, filename: str) -> tuple:
-        """Apply proportional region polygon as a mask to a single image."""
-        from PIL import Image
-        from ISAT.annotation import Annotation, Object
-
-        image = Image.open(file_path)
-        w, h = image.size
-
-        label_path = os.path.join(
-            self.mainwindow.label_root,
-            ".".join(filename.split(".")[:-1]) + ".json"
-        )
-        annotation = Annotation(file_path, label_path)
-        annotation.load_annotation()
-
-        # Apply Map: mapping
-        mapping = self._parse_mapping()
-        save_label = self._map_category(self._region_label, mapping)
-
-        # Map proportional points (0~1) to pixel coords
-        prop_pts = self.region_widget.get_proportional_points()
-        segmentation = [
-            (round(rx * w, 2), round(ry * h, 2))
-            for rx, ry in prop_pts
-        ]
-        area = self._polygon_area(segmentation)
-
-        # Compute layer — bottom or top relative to existing objects
-        if self._region_layer_bottom:
-            # Shift all existing objects up by 1 to make room at absolute bottom
-            for obj in annotation.objects:
-                obj.layer = int(obj.layer) + 1
-            layer = 1
-        else:
-            max_layer = 0
-            for obj in annotation.objects:
-                try:
-                    max_layer = max(max_layer, int(obj.layer))
-                except Exception:
-                    pass
-            layer = max_layer + 1 if annotation.objects else 1
-
-        # Compute bbox
-        xs = [p[0] for p in segmentation]
-        ys = [p[1] for p in segmentation]
-        bbox = (min(xs), min(ys), max(xs), max(ys))
-
-        # Determine group
-        group = 1
-        for obj in annotation.objects:
-            try:
-                group = max(group, int(obj.group) + 1)
-            except Exception:
-                pass
-
-        obj = Object(
-            category=save_label,
-            group=group,
-            segmentation=segmentation,
-            area=area,
-            layer=layer,
-            bbox=bbox,
-            iscrowd=False,
-            note="",
-        )
-        annotation.objects.append(obj)
-        annotation.save_annotation()
-        return 1, 1  # masks, objects
-
-    # ==================================================================
-    # Small Mask Remap (relabel small masks to another category)
-    # ==================================================================
-
-    def _remap_small_masks(self):
-        """Remap small masks of a source category to a target category."""
-        files, start_1, end_1 = self._resolve_range()
-        if files is None:
-            return
-
-        source_cat = self.remap_source_edit.text().strip()
-        target_cat = self.remap_target_edit.text().strip()
-        threshold_pct = self.remap_threshold_spin.value()
-
-        if not source_cat:
-            QtWidgets.QMessageBox.warning(
-                self.mainwindow, "Input Error",
-                "Please enter a source category."
-            )
-            return
-        if not target_cat:
-            QtWidgets.QMessageBox.warning(
-                self.mainwindow, "Input Error",
-                "Please enter a target category."
-            )
-            return
-
-        reply = QtWidgets.QMessageBox.question(
-            self.mainwindow, "Confirm Small Mask Remap",
-            f"Remap masks in images #{start_1} – #{end_1} ({len(files)} images)\n"
-            f"Source: \"{source_cat}\" < {threshold_pct}%\n"
-            f"→ Target: \"{target_cat}\"\n\n"
-            f"Masks with area below the threshold will be relabeled.\nContinue?",
-            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
-        )
-        if reply != QtWidgets.QMessageBox.Yes:
-            return
-
-        self._batch_files = files
-        self._batch_index = 0
-        self._batch_running = True
-        self._total_masks = 0
-        self._total_objects = 0
-        self._remap_mode = True
-        self._remap_source_cat = source_cat
-        self._remap_target_cat = target_cat
-        self._remap_threshold_pct = threshold_pct
-        self.result_table.setRowCount(0)
-        self.processbar.setMaximum(len(files))
-        self.processbar.setValue(0)
-
-        self._disable_buttons()
-        QTimer.singleShot(50, self._process_next)
-
-    def _process_remap_single_image(self, file_path: str, filename: str) -> int:
-        """Relabel small masks of source category in a single image. Returns count."""
-        from PIL import Image
-        from ISAT.annotation import Annotation
-
-        base = ".".join(filename.split(".")[:-1])
-        json_path = os.path.join(self.mainwindow.label_root, base + ".json")
-        if not os.path.isfile(json_path):
-            return 0
-
-        # Apply Map: mapping
-        mapping = self._parse_mapping()
-        save_target = self._map_category(self._remap_target_cat, mapping)
-
-        try:
-            img = Image.open(file_path)
-            img_area = img.width * img.height
-        except Exception:
-            return 0
-
-        annotation = Annotation(file_path, json_path)
-        annotation.load_annotation()
-
-        remapped = 0
-        for obj in annotation.objects:
-            if obj.category != self._remap_source_cat:
-                continue
-            obj_pct = (obj.area / img_area) * 100.0 if img_area > 0 else 0
-            if obj_pct < self._remap_threshold_pct:
-                obj.category = save_target
-                remapped += 1
-
-        if remapped > 0:
-            annotation.save_annotation()
-
-        return remapped
-
     def _finish(self):
         self._batch_running = False
 
@@ -1594,6 +1207,11 @@ class SAM3TextPromptPlugin(PluginBase):
                 f"Deleted {data['actual_removed']} small mask(s) "
                 f"from {data['actual_files']} file(s)."
             )
+        elif getattr(self, '_merge_mode', False):
+            self.status_label.setText(
+                f"Merged: {self._total_masks} mask(s) into {self._total_objects} "
+                f"across {len(self._batch_files)} images."
+            )
         else:
             self.status_label.setText(
                 f"Done: {len(self._batch_files)} images, "
@@ -1602,8 +1220,7 @@ class SAM3TextPromptPlugin(PluginBase):
 
         self._range_mode = False
         self._delete_small_mode = False
-        self._region_mode = False
-        self._remap_mode = False
+        self._merge_mode = False
         self._enable_buttons()
         if self.mainwindow.current_index is not None:
             self.mainwindow.show_image(self.mainwindow.current_index, zoomfit=False)
@@ -1611,6 +1228,7 @@ class SAM3TextPromptPlugin(PluginBase):
     def stop(self):
         self._batch_running = False
         self._small_scan_mode = False
+        self._merge_mode = False
         self.status_label.setText("Stopping ...")
         self.stop_btn.setEnabled(False)
         self._enable_buttons()
@@ -1626,8 +1244,7 @@ class SAM3TextPromptPlugin(PluginBase):
         self.range_annotate_btn.setEnabled(True)
         self.range_delete_btn.setEnabled(True)
         self.delete_small_btn.setEnabled(True)
-        self.remap_btn.setEnabled(True)
-        self.apply_region_btn.setEnabled(True)
+        self.merge_btn.setEnabled(True)
 
         # 同步 range spinbox 上限到当前图片总数
         total = len(self.mainwindow.files_list)
