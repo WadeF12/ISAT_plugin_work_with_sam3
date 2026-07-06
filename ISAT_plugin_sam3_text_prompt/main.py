@@ -12,11 +12,145 @@ Core API (from ISAT mainwindow.py):
 import os
 from typing import List
 
-from PyQt5 import QtCore, QtWidgets
+from PyQt5 import QtCore, QtGui, QtWidgets
 from PyQt5.QtCore import QTimer
 
 from ISAT.widgets.plugin_base import PluginBase
 
+
+# ==================================================================
+# Proportional Region Widget — draggable 4-corner region mapper
+# ==================================================================
+
+class ProportionalRegionWidget(QtWidgets.QWidget):
+    """A widget displaying a proportional rectangle with 4 draggable corner handles.
+
+    The rectangle aspect ratio matches the target image. Users drag the 4
+    corner points to define a quadrilateral region. The proportional
+    coordinates (0~1 range) are later mapped to actual image pixels.
+    """
+
+    HANDLE_RADIUS = 7
+    DEFAULT_AR = 4.0 / 3.0
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._handles = [
+            QtCore.QPointF(0.0, 0.0),
+            QtCore.QPointF(1.0, 0.0),
+            QtCore.QPointF(1.0, 1.0),
+            QtCore.QPointF(0.0, 1.0),
+        ]
+        self._active_handle = -1
+        self._aspect_ratio = self.DEFAULT_AR
+        self.setMinimumHeight(80)
+        self.setMouseTracking(True)
+
+    def set_aspect_ratio(self, w: int, h: int):
+        if h > 0:
+            self._aspect_ratio = float(w) / float(h)
+        self.update()
+
+    def get_proportional_points(self):
+        return [(p.x(), p.y()) for p in self._handles]
+
+    def reset_to_corners(self):
+        self._handles = [
+            QtCore.QPointF(0.0, 0.0),
+            QtCore.QPointF(1.0, 0.0),
+            QtCore.QPointF(1.0, 1.0),
+            QtCore.QPointF(0.0, 1.0),
+        ]
+        self.update()
+
+    def sizeHint(self):
+        return QtCore.QSize(320, 240)
+
+    def _widget_to_prop(self, wx: float, wy: float) -> QtCore.QPointF:
+        pw, ph = self.width(), self.height()
+        if pw <= 0 or ph <= 0:
+            return QtCore.QPointF(0, 0)
+        return QtCore.QPointF(
+            max(0.0, min(1.0, wx / pw)),
+            max(0.0, min(1.0, wy / ph)),
+        )
+
+    def _prop_to_widget(self, px: float, py: float) -> QtCore.QPointF:
+        return QtCore.QPointF(px * self.width(), py * self.height())
+
+    def _find_handle(self, pos: QtCore.QPoint) -> int:
+        hit_dist = (self.HANDLE_RADIUS * 2) ** 2
+        for i, h in enumerate(self._handles):
+            wp = self._prop_to_widget(h.x(), h.y())
+            dx = pos.x() - wp.x()
+            dy = pos.y() - wp.y()
+            if dx * dx + dy * dy <= hit_dist:
+                return i
+        return -1
+
+    def paintEvent(self, event):
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.Antialiasing)
+
+        w, h = self.width(), self.height()
+
+        painter.setPen(QtGui.QPen(QtGui.QColor("#666666"), 1))
+        painter.setBrush(QtGui.QColor("#2d2d2d"))
+        painter.drawRect(0, 0, w - 1, h - 1)
+
+        pts = [self._prop_to_widget(p.x(), p.y()) for p in self._handles]
+
+        poly = QtGui.QPolygonF(pts)
+        fill = QtGui.QColor("#0078D4")
+        fill.setAlpha(50)
+        painter.setBrush(fill)
+        painter.setPen(QtGui.QPen(QtGui.QColor("#0078D4"), 2))
+        painter.drawPolygon(poly)
+
+        dash_pen = QtGui.QPen(QtGui.QColor("#00B7C3"), 2, QtCore.Qt.DashLine)
+        for i in range(4):
+            painter.setPen(dash_pen)
+            painter.drawLine(pts[i], pts[(i + 1) % 4])
+
+        for i, pt in enumerate(pts):
+            if i == self._active_handle:
+                painter.setBrush(QtGui.QColor("#FF6B00"))
+                painter.setPen(QtGui.QPen(QtGui.QColor("#FF6B00"), 2))
+            else:
+                painter.setBrush(QtGui.QColor("#00B7C3"))
+                painter.setPen(QtGui.QPen(QtCore.Qt.white, 1))
+            painter.drawEllipse(pt, self.HANDLE_RADIUS, self.HANDLE_RADIUS)
+
+        painter.end()
+
+    def mousePressEvent(self, event):
+        if event.button() == QtCore.Qt.LeftButton:
+            self._active_handle = self._find_handle(event.pos())
+            if self._active_handle >= 0:
+                self.setCursor(QtCore.Qt.ClosedHandCursor)
+            self.update()
+
+    def mouseMoveEvent(self, event):
+        if self._active_handle >= 0:
+            prop = self._widget_to_prop(event.x(), event.y())
+            self._handles[self._active_handle] = prop
+            self.update()
+        else:
+            h = self._find_handle(event.pos())
+            self.setCursor(
+                QtCore.Qt.OpenHandCursor if h >= 0 else QtCore.Qt.ArrowCursor
+            )
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == QtCore.Qt.LeftButton:
+            self._active_handle = -1
+            self.setCursor(QtCore.Qt.ArrowCursor)
+            self.update()
+
+
+# ==================================================================
+# Plugin
+# ==================================================================
 
 class SAM3TextPromptPlugin(PluginBase):
     """SAM3 text-prompt batch auto annotation plugin."""
@@ -40,6 +174,16 @@ class SAM3TextPromptPlugin(PluginBase):
         self._small_scan_params = {}
         self._merge_mode = False
         self._merge_category = ""
+        self._region_mode = False
+        self._region_label = ""
+        self._region_layer_bottom = True
+        self._remap_mode = False
+        self._remap_source_cat = ""
+        self._remap_target_cat = ""
+        self._remap_threshold_pct = 0.0
+        self._clip_mode = False
+        self._clip_cat_erase = ""
+        self._clip_cat_keep = ""
         self.default_prompts = "person, car"
 
     # ==================================================================
@@ -291,6 +435,205 @@ class SAM3TextPromptPlugin(PluginBase):
         layout.addStretch()
         main_layout.addWidget(row)
 
+        # ---- separator ----
+        sep = QtWidgets.QFrame()
+        sep.setFrameShape(QtWidgets.QFrame.HLine)
+        sep.setFrameShadow(QtWidgets.QFrame.Sunken)
+        main_layout.addWidget(sep)
+
+        # ---- row 6: small mask remap ----
+        row = QtWidgets.QWidget()
+        row.setMaximumHeight(36)
+        layout = QtWidgets.QHBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        layout.addWidget(QtWidgets.QLabel("Remap:"))
+        self.remap_source_edit = QtWidgets.QLineEdit()
+        self.remap_source_edit.setPlaceholderText("source cat")
+        self.remap_source_edit.setToolTip(
+            "Source category: masks of this category below the threshold will be remapped."
+        )
+        layout.addWidget(self.remap_source_edit)
+
+        layout.addWidget(QtWidgets.QLabel("<"))
+        self.remap_threshold_spin = QtWidgets.QDoubleSpinBox()
+        self.remap_threshold_spin.setRange(0.01, 100.0)
+        self.remap_threshold_spin.setValue(1.0)
+        self.remap_threshold_spin.setDecimals(2)
+        self.remap_threshold_spin.setSuffix("%")
+        self.remap_threshold_spin.setToolTip(
+            "Masks of the source category with area < this % of image area will be remapped."
+        )
+        layout.addWidget(self.remap_threshold_spin)
+
+        layout.addWidget(QtWidgets.QLabel("→"))
+        self.remap_target_edit = QtWidgets.QLineEdit()
+        self.remap_target_edit.setPlaceholderText("target cat")
+        self.remap_target_edit.setToolTip(
+            "Target category: small masks will be relabeled to this category.\n"
+            "Supports Map: mapping."
+        )
+        layout.addWidget(self.remap_target_edit)
+
+        self.remap_btn = QtWidgets.QPushButton("Remap")
+        self.remap_btn.setToolTip(
+            "Scan the From # – To # range and remap small masks\n"
+            "of the source category to the target category."
+        )
+        self.remap_btn.clicked.connect(self._remap_small_masks)
+        self.remap_btn.setStyleSheet(
+            "QPushButton { background-color: #C239B3; color: white; "
+            "font-weight: bold; padding: 4px 12px; }"
+        )
+        layout.addWidget(self.remap_btn)
+        layout.addStretch()
+        main_layout.addWidget(row)
+
+        # ---- row 6b: erase overlap between two categories ----
+        row = QtWidgets.QWidget()
+        row.setMaximumHeight(36)
+        layout = QtWidgets.QHBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        layout.addWidget(QtWidgets.QLabel("Erase Cat:"))
+        self.clip_erase_edit = QtWidgets.QLineEdit()
+        self.clip_erase_edit.setPlaceholderText("hardroad")
+        self.clip_erase_edit.setToolTip(
+            "Category whose masks will be erased in overlapping areas.\n"
+            "Supports Map: mapping."
+        )
+        layout.addWidget(self.clip_erase_edit)
+
+        layout.addWidget(QtWidgets.QLabel("Keep Cat:"))
+        self.clip_keep_edit = QtWidgets.QLineEdit()
+        self.clip_keep_edit.setPlaceholderText("vertical_surface")
+        self.clip_keep_edit.setToolTip(
+            "Category whose masks are kept (higher priority) in overlapping areas.\n"
+            "Supports Map: mapping."
+        )
+        layout.addWidget(self.clip_keep_edit)
+
+        self.clip_overlap_btn = QtWidgets.QPushButton("Erase Overlap")
+        self.clip_overlap_btn.setToolTip(
+            "For images in From # – To # range:\n"
+            "Where Erase Cat and Keep Cat masks overlap,\n"
+            "erase the Erase Cat portion, keeping only Keep Cat.\n"
+            "Fully covered Erase Cat masks are removed entirely."
+        )
+        self.clip_overlap_btn.clicked.connect(self._clip_overlap)
+        self.clip_overlap_btn.setStyleSheet(
+            "QPushButton { background-color: #D83B01; color: white; "
+            "font-weight: bold; padding: 4px 12px; }"
+        )
+        layout.addWidget(self.clip_overlap_btn)
+        layout.addStretch()
+        main_layout.addWidget(row)
+
+        # ---- separator ----
+        sep = QtWidgets.QFrame()
+        sep.setFrameShape(QtWidgets.QFrame.HLine)
+        sep.setFrameShadow(QtWidgets.QFrame.Sunken)
+        main_layout.addWidget(sep)
+
+        # ---- row 7: region label + layer dropdown ----
+        row = QtWidgets.QWidget()
+        row.setMaximumHeight(36)
+        layout = QtWidgets.QHBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        layout.addWidget(QtWidgets.QLabel("Region Label:"))
+        self.region_label_edit = QtWidgets.QLineEdit()
+        self.region_label_edit.setPlaceholderText("e.g. background")
+        self.region_label_edit.setToolTip(
+            "Category name for the mapped region mask.\n"
+            "Supports Map: mapping."
+        )
+        layout.addWidget(self.region_label_edit)
+
+        layout.addWidget(QtWidgets.QLabel("Layer:"))
+        self.region_layer_combo = QtWidgets.QComboBox()
+        self.region_layer_combo.addItems(["追加-最底层", "追加-最上层"])
+        self.region_layer_combo.setToolTip(
+            "Bottom: place region mask behind all existing objects.\n"
+            "Top: place region mask on top of all existing objects."
+        )
+        layout.addWidget(self.region_layer_combo)
+        layout.addStretch()
+        main_layout.addWidget(row)
+
+        # ---- row 8: region aspect ratio config ----
+        row = QtWidgets.QWidget()
+        row.setMaximumHeight(36)
+        layout = QtWidgets.QHBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        layout.addWidget(QtWidgets.QLabel("W:"))
+        self.region_ratio_w_spin = QtWidgets.QSpinBox()
+        self.region_ratio_w_spin.setRange(1, 99999)
+        self.region_ratio_w_spin.setValue(640)
+        self.region_ratio_w_spin.setToolTip("Reference image width for aspect ratio")
+        layout.addWidget(self.region_ratio_w_spin)
+
+        layout.addWidget(QtWidgets.QLabel("H:"))
+        self.region_ratio_h_spin = QtWidgets.QSpinBox()
+        self.region_ratio_h_spin.setRange(1, 99999)
+        self.region_ratio_h_spin.setValue(480)
+        self.region_ratio_h_spin.setToolTip("Reference image height for aspect ratio")
+        layout.addWidget(self.region_ratio_h_spin)
+
+        self.region_ratio_update_btn = QtWidgets.QPushButton("Update Ratio")
+        self.region_ratio_update_btn.setToolTip(
+            "Apply the W:H ratio to the region rectangle below.\n"
+            "Height is fixed; width adjusts to match the ratio."
+        )
+        self.region_ratio_update_btn.clicked.connect(self._update_region_ratio)
+        layout.addWidget(self.region_ratio_update_btn)
+        layout.addStretch()
+        main_layout.addWidget(row)
+
+        # ---- row 9: proportional region widget (centered) ----
+        row = QtWidgets.QWidget()
+        layout = QtWidgets.QHBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        self.region_widget = ProportionalRegionWidget()
+        self.region_widget.setToolTip(
+            "Drag the 4 cyan corner points to define the region.\n"
+            "The rectangle ratio matches the W:H values above.\n"
+            "The defined quadrilateral is mapped onto each image in the range."
+        )
+        REGION_H = 237
+        self.region_widget.setFixedSize(316, REGION_H)
+        self.region_widget.setSizePolicy(
+            QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed
+        )
+
+        layout.addStretch()
+        layout.addWidget(self.region_widget)
+        layout.addStretch()
+        main_layout.addWidget(row)
+
+        # ---- row 10: apply region button ----
+        row = QtWidgets.QWidget()
+        row.setMaximumHeight(36)
+        layout = QtWidgets.QHBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        self.apply_region_btn = QtWidgets.QPushButton("Apply Region")
+        self.apply_region_btn.setToolTip(
+            "Apply the defined quadrilateral region as a mask\n"
+            "to ALL images in the From # – To # range.\n"
+            "Appends the mask (does not replace existing annotations)."
+        )
+        self.apply_region_btn.clicked.connect(self._apply_region)
+        self.apply_region_btn.setStyleSheet(
+            "QPushButton { background-color: #8764B8; color: white; "
+            "font-weight: bold; padding: 4px 12px; }"
+        )
+        layout.addWidget(self.apply_region_btn)
+        layout.addStretch()
+        main_layout.addWidget(row)
+
         # ---- progress bar ----
         self.processbar = QtWidgets.QProgressBar()
         self.processbar.setMaximum(100)
@@ -382,6 +725,9 @@ class SAM3TextPromptPlugin(PluginBase):
         self.range_delete_btn.setEnabled(False)
         self.delete_small_btn.setEnabled(False)
         self.merge_btn.setEnabled(False)
+        self.remap_btn.setEnabled(False)
+        self.clip_overlap_btn.setEnabled(False)
+        self.apply_region_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
 
     def _enable_buttons(self):
@@ -392,6 +738,9 @@ class SAM3TextPromptPlugin(PluginBase):
         self.range_delete_btn.setEnabled(True)
         self.delete_small_btn.setEnabled(True)
         self.merge_btn.setEnabled(True)
+        self.remap_btn.setEnabled(True)
+        self.clip_overlap_btn.setEnabled(True)
+        self.apply_region_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
 
     def predict_current(self):
@@ -991,6 +1340,508 @@ class SAM3TextPromptPlugin(PluginBase):
 
         return len(target_objs), merged_count
 
+    # ==================================================================
+    # Proportional Region Mapping
+    # ==================================================================
+
+    def _update_region_ratio(self):
+        """Update the rectangle widget size to match the W:H ratio inputs."""
+        w = self.region_ratio_w_spin.value()
+        h = self.region_ratio_h_spin.value()
+        FIXED_H = 237
+        new_w = max(20, int(FIXED_H * w / h)) if h > 0 else FIXED_H
+        self.region_widget.setFixedSize(new_w, FIXED_H)
+        self.region_widget.set_aspect_ratio(w, h)
+
+    def _apply_region(self):
+        """Apply proportional region quadrilateral as mask to From/To range."""
+        files, start_1, end_1 = self._resolve_range()
+        if files is None:
+            return
+
+        label = self.region_label_edit.text().strip()
+        if not label:
+            QtWidgets.QMessageBox.warning(
+                self.mainwindow, "Input Error",
+                "Please enter a label for the region mask."
+            )
+            return
+
+        layer_mode = "Bottom" if self.region_layer_combo.currentIndex() == 0 else "Top"
+
+        reply = QtWidgets.QMessageBox.question(
+            self.mainwindow, "Confirm Apply Region",
+            f"Apply region mask to images #{start_1} – #{end_1} ({len(files)} images)\n"
+            f"Label: \"{label}\"\n"
+            f"Layer: {layer_mode}\n\n"
+            f"The region mask will be APPENDED to existing annotations.\nContinue?",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+        )
+        if reply != QtWidgets.QMessageBox.Yes:
+            return
+
+        self._batch_files = files
+        self._batch_index = 0
+        self._batch_running = True
+        self._total_masks = 0
+        self._total_objects = 0
+        self._region_mode = True
+        self._region_label = label
+        self._region_layer_bottom = (self.region_layer_combo.currentIndex() == 0)
+        self.result_table.setRowCount(0)
+        self.processbar.setMaximum(len(files))
+        self.processbar.setValue(0)
+
+        self._disable_buttons()
+        QTimer.singleShot(50, self._process_next)
+
+    def _process_region_single_image(self, file_path: str, filename: str) -> tuple:
+        """Apply proportional region polygon as a mask to a single image."""
+        from PIL import Image
+        from ISAT.annotation import Annotation, Object
+
+        image = Image.open(file_path)
+        w, h = image.size
+
+        label_path = os.path.join(
+            self.mainwindow.label_root,
+            ".".join(filename.split(".")[:-1]) + ".json"
+        )
+        annotation = Annotation(file_path, label_path)
+        annotation.load_annotation()
+
+        mapping = self._parse_mapping()
+        save_label = self._map_category(self._region_label, mapping)
+
+        prop_pts = self.region_widget.get_proportional_points()
+        segmentation = [
+            (round(rx * w, 2), round(ry * h, 2))
+            for rx, ry in prop_pts
+        ]
+        area = self._polygon_area(segmentation)
+
+        if self._region_layer_bottom:
+            for obj in annotation.objects:
+                obj.layer = int(obj.layer) + 1
+            layer = 1
+        else:
+            max_layer = 0
+            for obj in annotation.objects:
+                try:
+                    max_layer = max(max_layer, int(obj.layer))
+                except Exception:
+                    pass
+            layer = max_layer + 1 if annotation.objects else 1
+
+        xs = [p[0] for p in segmentation]
+        ys = [p[1] for p in segmentation]
+        bbox = (min(xs), min(ys), max(xs), max(ys))
+
+        group = 1
+        for obj in annotation.objects:
+            try:
+                group = max(group, int(obj.group) + 1)
+            except Exception:
+                pass
+
+        obj = Object(
+            category=save_label,
+            group=group,
+            segmentation=segmentation,
+            area=area,
+            layer=layer,
+            bbox=bbox,
+            iscrowd=False,
+            note="",
+        )
+        annotation.objects.append(obj)
+        annotation.save_annotation()
+        return 1, 1
+
+    # ==================================================================
+    # Small Mask Remap (relabel small masks to another category)
+    # ==================================================================
+
+    def _remap_small_masks(self):
+        """Remap small masks of a source category to a target category."""
+        files, start_1, end_1 = self._resolve_range()
+        if files is None:
+            return
+
+        source_cat = self.remap_source_edit.text().strip()
+        target_cat = self.remap_target_edit.text().strip()
+        threshold_pct = self.remap_threshold_spin.value()
+
+        if not source_cat:
+            QtWidgets.QMessageBox.warning(
+                self.mainwindow, "Input Error",
+                "Please enter a source category."
+            )
+            return
+        if not target_cat:
+            QtWidgets.QMessageBox.warning(
+                self.mainwindow, "Input Error",
+                "Please enter a target category."
+            )
+            return
+
+        reply = QtWidgets.QMessageBox.question(
+            self.mainwindow, "Confirm Small Mask Remap",
+            f"Remap masks in images #{start_1} – #{end_1} ({len(files)} images)\n"
+            f"Source: \"{source_cat}\" < {threshold_pct}%\n"
+            f"→ Target: \"{target_cat}\"\n\n"
+            f"Masks with area below the threshold will be relabeled.\nContinue?",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+        )
+        if reply != QtWidgets.QMessageBox.Yes:
+            return
+
+        self._batch_files = files
+        self._batch_index = 0
+        self._batch_running = True
+        self._total_masks = 0
+        self._total_objects = 0
+        self._remap_mode = True
+        self._remap_source_cat = source_cat
+        self._remap_target_cat = target_cat
+        self._remap_threshold_pct = threshold_pct
+        self.result_table.setRowCount(0)
+        self.processbar.setMaximum(len(files))
+        self.processbar.setValue(0)
+
+        self._disable_buttons()
+        QTimer.singleShot(50, self._process_next)
+
+    def _process_remap_single_image(self, file_path: str, filename: str) -> int:
+        """Relabel small masks of source category in a single image. Returns count."""
+        from PIL import Image
+        from ISAT.annotation import Annotation
+
+        base = ".".join(filename.split(".")[:-1])
+        json_path = os.path.join(self.mainwindow.label_root, base + ".json")
+        if not os.path.isfile(json_path):
+            return 0
+
+        mapping = self._parse_mapping()
+        save_target = self._map_category(self._remap_target_cat, mapping)
+
+        try:
+            img = Image.open(file_path)
+            img_area = img.width * img.height
+        except Exception:
+            return 0
+
+        annotation = Annotation(file_path, json_path)
+        annotation.load_annotation()
+
+        remapped = 0
+        for obj in annotation.objects:
+            if obj.category != self._remap_source_cat:
+                continue
+            obj_pct = (obj.area / img_area) * 100.0 if img_area > 0 else 0
+            if obj_pct < self._remap_threshold_pct:
+                obj.category = save_target
+                remapped += 1
+
+        if remapped > 0:
+            annotation.save_annotation()
+
+        return remapped
+
+    # ==================================================================
+    # Erase Overlap: remove overlapping regions between two categories
+    # ==================================================================
+
+    def _clip_overlap(self):
+        """Erase overlapping areas: Erase Cat masks get clipped where Keep Cat overlaps."""
+        files, start_1, end_1 = self._resolve_range()
+        if files is None:
+            return
+
+        erase_cat = self.clip_erase_edit.text().strip()
+        keep_cat = self.clip_keep_edit.text().strip()
+
+        if not erase_cat:
+            QtWidgets.QMessageBox.warning(
+                self.mainwindow, "Input Error",
+                "Please enter an Erase Cat category."
+            )
+            return
+        if not keep_cat:
+            QtWidgets.QMessageBox.warning(
+                self.mainwindow, "Input Error",
+                "Please enter a Keep Cat category."
+            )
+            return
+        if erase_cat == keep_cat:
+            QtWidgets.QMessageBox.warning(
+                self.mainwindow, "Input Error",
+                "Erase Cat and Keep Cat must be different categories."
+            )
+            return
+
+        reply = QtWidgets.QMessageBox.question(
+            self.mainwindow, "Confirm Erase Overlap",
+            f"Process images #{start_1} – #{end_1} ({len(files)} images)\n\n"
+            f"Erase Cat: \"{erase_cat}\"  ← masks will be clipped\n"
+            f"Keep Cat:  \"{keep_cat}\"  ← masks kept in overlapping areas\n\n"
+            f"Where the two categories overlap, the Erase Cat portion\n"
+            f"will be removed. Fully covered Erase Cat masks\n"
+            f"will be deleted entirely.\n\nContinue?",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+        )
+        if reply != QtWidgets.QMessageBox.Yes:
+            return
+
+        self._batch_files = files
+        self._batch_index = 0
+        self._batch_running = True
+        self._total_masks = 0
+        self._total_objects = 0
+        self._clip_mode = True
+        self._clip_cat_erase = erase_cat
+        self._clip_cat_keep = keep_cat
+        self.result_table.setRowCount(0)
+        self.processbar.setMaximum(len(files))
+        self.processbar.setValue(0)
+
+        self._disable_buttons()
+        QTimer.singleShot(50, self._process_next)
+
+    def _process_clip_single_image(self, file_path: str, filename: str) -> tuple:
+        """Erase overlapping areas of Erase Cat where Keep Cat masks exist.
+
+        Returns (erased_count, fragment_count):
+            erased_count — number of Erase Cat masks that were modified/removed
+            fragment_count — number of resulting Erase Cat mask fragments
+        """
+        import cv2
+        import numpy as np
+        from PIL import Image
+        from ISAT.annotation import Annotation, Object
+
+        base = ".".join(filename.split(".")[:-1])
+        json_path = os.path.join(self.mainwindow.label_root, base + ".json")
+        if not os.path.isfile(json_path):
+            return 0, 0
+
+        mapping = self._parse_mapping()
+        erase_cat = self._map_category(self._clip_cat_erase, mapping)
+        keep_cat = self._map_category(self._clip_cat_keep, mapping)
+
+        annotation = Annotation(file_path, json_path)
+        annotation.load_annotation()
+
+        # Separate objects into erase / keep / other
+        erase_objs = []
+        keep_objs = []
+        other_objs = []
+        for obj in annotation.objects:
+            if obj.category == erase_cat:
+                erase_objs.append(obj)
+            elif obj.category == keep_cat:
+                keep_objs.append(obj)
+            else:
+                other_objs.append(obj)
+
+        if not erase_objs or not keep_objs:
+            return 0, 0
+
+        img = Image.open(file_path)
+        w, h = img.size
+
+        # Build union mask of all Keep Cat polygons
+        keep_union = np.zeros((h, w), dtype=np.uint8)
+        for obj in keep_objs:
+            pts = np.array([[p[0], p[1]] for p in obj.segmentation], dtype=np.int32)
+            if len(pts) >= 3:
+                cv2.fillPoly(keep_union, [pts], 255)
+
+        # Determine max group across all objects
+        max_group = 1
+        for obj in annotation.objects:
+            try:
+                max_group = max(max_group, int(obj.group))
+            except Exception:
+                pass
+
+        result_objs = []
+        erased_count = 0
+        fragment_count = 0
+
+        for obj in erase_objs:
+            pts = np.array([[p[0], p[1]] for p in obj.segmentation], dtype=np.int32)
+            if len(pts) < 3:
+                result_objs.append(obj)
+                continue
+
+            # Create mask for this Erase Cat object
+            erase_mask = np.zeros((h, w), dtype=np.uint8)
+            cv2.fillPoly(erase_mask, [pts], 255)
+
+            # Subtract Keep Cat union
+            clipped = cv2.bitwise_and(erase_mask, cv2.bitwise_not(keep_union))
+
+            if np.count_nonzero(clipped) == 0:
+                # Fully covered — discard this mask entirely
+                erased_count += 1
+                continue
+
+            contours, _ = cv2.findContours(
+                clipped, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE
+            )
+
+            frag_for_this = 0
+            for contour in contours:
+                if len(contour) < 3:
+                    continue
+
+                # Snap contour points near keep polygon edges for seamless fit
+                raw_pts = contour.reshape(-1, 2).astype(np.float64)
+                snapped = self._snap_contour_to_keep_edges(raw_pts, keep_objs)
+
+                approx = cv2.approxPolyDP(
+                    snapped.reshape(-1, 1, 2).astype(np.float32), 0.5, True
+                )
+
+                segmentation = []
+                xmin, ymin = w, h
+                xmax, ymax = 0, 0
+                for pt in approx:
+                    x, y = float(pt[0][0]), float(pt[0][1])
+                    x, y = max(0.0, x), max(0.0, y)
+                    xmin, ymin = min(x, xmin), min(y, ymin)
+                    xmax, ymax = max(x, xmax), max(y, ymax)
+                    segmentation.append((round(x, 2), round(y, 2)))
+
+                area = self._polygon_area(segmentation)
+                if area < 1.0:
+                    continue
+
+                frag_for_this += 1
+                if frag_for_this == 1:
+                    # Replace the original object in-place
+                    obj.segmentation = segmentation
+                    obj.area = area
+                    obj.bbox = (xmin, ymin, xmax, ymax)
+                    obj.note = "clipped"
+                    result_objs.append(obj)
+                else:
+                    # Additional fragment → create new object
+                    max_group += 1
+                    new_obj = Object(
+                        category=erase_cat,
+                        group=max_group,
+                        segmentation=segmentation,
+                        area=area,
+                        layer=obj.layer,
+                        bbox=(xmin, ymin, xmax, ymax),
+                        iscrowd=False,
+                        note="clipped",
+                    )
+                    result_objs.append(new_obj)
+
+            if frag_for_this > 0:
+                erased_count += 1
+                fragment_count += frag_for_this
+
+        # Rebuild object list and save
+        annotation.objects = other_objs + keep_objs + result_objs
+        annotation.save_annotation()
+
+        return erased_count, fragment_count
+
+    @staticmethod
+    def _snap_contour_to_keep_edges(contour_pts, keep_objs, snap_threshold=3.0):
+        """Snap contour points near keep-polygon edges to lie exactly on those edges.
+
+        This ensures the clipped Erase Cat mask shares the exact same boundary
+        as the Keep Cat polygon along overlapping regions — eliminating seams.
+
+        For each run of consecutive points that snap to the same keep-polygon
+        edge, the run is replaced by just the two projected endpoints of that
+        segment (since the keep edge is a straight line).
+
+        Args:
+            contour_pts: (N, 2) float64 array of contour vertices.
+            keep_objs: list of ISAT Object whose segmentation edges to snap to.
+            snap_threshold: max pixel distance to trigger snapping.
+
+        Returns:
+            float64 array of snapped vertices.
+        """
+        import numpy as np
+
+        n = len(contour_pts)
+        if n < 3:
+            return contour_pts
+
+        pts = np.array(contour_pts, dtype=np.float64)
+
+        # Build all keep-polygon edges: (start, end) as float64 arrays
+        all_edges = []
+        for obj in keep_objs:
+            seg = obj.segmentation
+            m = len(seg)
+            for i in range(m):
+                a = np.array([seg[i][0], seg[i][1]], dtype=np.float64)
+                b = np.array([seg[(i + 1) % m][0], seg[(i + 1) % m][1]],
+                             dtype=np.float64)
+                all_edges.append((a, b))
+
+        if not all_edges:
+            return pts
+
+        def _proj_onto_seg(p, a, b):
+            ab = b - a
+            l2 = float(np.dot(ab, ab))
+            if l2 < 1e-12:
+                return a.copy(), float(np.linalg.norm(p - a))
+            t = max(0.0, min(1.0, float(np.dot(p - a, ab)) / l2))
+            proj = a + t * ab
+            return proj, float(np.linalg.norm(p - proj))
+
+        # Classify each contour point: (nearest_edge_idx, projected_point)
+        nearest = []
+        for pt in pts:
+            best_d = snap_threshold + 1.0
+            best_e = -1
+            best_p = pt
+            for ei, (ea, eb) in enumerate(all_edges):
+                proj, d = _proj_onto_seg(pt, ea, eb)
+                if d < best_d:
+                    best_d = d
+                    best_e = ei
+                    best_p = proj
+            nearest.append((best_e, best_p if best_e >= 0 else pt))
+
+        # Build result: collapse consecutive same-edge runs to 2 endpoints
+        result = []
+        i = 0
+        while i < n:
+            e_idx, proj_pt = nearest[i]
+            if e_idx < 0:
+                result.append(pts[i])
+                i += 1
+            else:
+                # Start of a run on edge e_idx
+                run_start = i
+                while i < n and nearest[i][0] == e_idx:
+                    i += 1
+                run_end = i
+
+                if run_end - run_start <= 1:
+                    result.append(proj_pt)
+                else:
+                    # Replace entire run with its two projected endpoints
+                    _, proj_first = nearest[run_start]
+                    _, proj_last = nearest[run_end - 1]
+                    result.append(proj_first)
+                    if np.linalg.norm(proj_last - proj_first) > 0.5:
+                        result.append(proj_last)
+
+        return np.array(result, dtype=np.float64)
+
     def _process_next(self):
         if not self._batch_running or self._batch_index >= len(self._batch_files):
             self._finish()
@@ -1006,12 +1857,17 @@ class SAM3TextPromptPlugin(PluginBase):
         QtWidgets.QApplication.processEvents()
 
         try:
-            # 分支: merge / delete_small / range 全图标注 / SAM3 text-prompt
+            # 分支: merge / remap / delete_small / region / range / SAM3
             if getattr(self, '_merge_mode', False):
                 num_masks, num_objects = self._process_merge_single_image(
                     file_path, filename
                 )
                 mode_tag = "[Merge]"
+            elif getattr(self, '_remap_mode', False):
+                remapped = self._process_remap_single_image(file_path, filename)
+                mode_tag = "[Remap]"
+                num_masks = remapped
+                num_objects = remapped
             elif getattr(self, '_delete_small_mode', False):
                 removed = self._process_small_delete(filename)
                 self._delete_small_data["actual_removed"] += removed
@@ -1025,6 +1881,16 @@ class SAM3TextPromptPlugin(PluginBase):
                     file_path, filename
                 )
                 mode_tag = "[Range]"
+            elif getattr(self, '_clip_mode', False):
+                num_masks, num_objects = self._process_clip_single_image(
+                    file_path, filename
+                )
+                mode_tag = "[ClipOverlap]"
+            elif getattr(self, '_region_mode', False):
+                num_masks, num_objects = self._process_region_single_image(
+                    file_path, filename
+                )
+                mode_tag = "[Region]"
             else:
                 categories = self._get_categories()
                 num_masks, num_objects = self._predict_single_image(
@@ -1221,6 +2087,9 @@ class SAM3TextPromptPlugin(PluginBase):
         self._range_mode = False
         self._delete_small_mode = False
         self._merge_mode = False
+        self._region_mode = False
+        self._remap_mode = False
+        self._clip_mode = False
         self._enable_buttons()
         if self.mainwindow.current_index is not None:
             self.mainwindow.show_image(self.mainwindow.current_index, zoomfit=False)
@@ -1229,6 +2098,9 @@ class SAM3TextPromptPlugin(PluginBase):
         self._batch_running = False
         self._small_scan_mode = False
         self._merge_mode = False
+        self._region_mode = False
+        self._remap_mode = False
+        self._clip_mode = False
         self.status_label.setText("Stopping ...")
         self.stop_btn.setEnabled(False)
         self._enable_buttons()
@@ -1245,6 +2117,9 @@ class SAM3TextPromptPlugin(PluginBase):
         self.range_delete_btn.setEnabled(True)
         self.delete_small_btn.setEnabled(True)
         self.merge_btn.setEnabled(True)
+        self.remap_btn.setEnabled(True)
+        self.clip_overlap_btn.setEnabled(True)
+        self.apply_region_btn.setEnabled(True)
 
         # 同步 range spinbox 上限到当前图片总数
         total = len(self.mainwindow.files_list)
