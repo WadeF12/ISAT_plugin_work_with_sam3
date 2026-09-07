@@ -48,7 +48,7 @@ Map:  grass:lawn, person:__background__
 
 所有按钮均受 `From #` – `To #` 范围限制。
 
-- 🟦 **Predict Range** — 对范围内所有图片执行 SAM3 预测，**覆盖**已有标注
+- 🟦 **Predict Range** — 对范围内所有图片执行 SAM3 预测，**追加**到已有标注之上，不覆盖旧标注
 - 🟩 **Resume Range** — 对范围内**尚无标注文件**的图片执行预测，已有标注的自动跳过
 - 🟧 **Annotate Range** — 将范围内每张图片**整个画面**标注为 `Cat:` 中的类别（全图多边形），**替换**已有标注，不调用 SAM3
 - 🟥 **Delete Range** — **删除**范围内所有图片的 `.json` 标注文件（不可逆）
